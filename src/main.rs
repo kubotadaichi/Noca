@@ -136,7 +136,12 @@ async fn fetch_events(
             Ok(pages) => {
                 had_success = true;
                 for page in &pages {
-                    if let Some(mut event) = api::parse_event(page, &db.id) {
+                    if let Some(mut event) = api::parse_event_with_keys(
+                        page,
+                        &db.id,
+                        db.title_property.as_deref(),
+                        db.date_property.as_deref(),
+                    ) {
                         event.color = Some(db.color.clone());
                         let date = event.date_start.or_else(|| {
                             event

@@ -113,15 +113,19 @@ fn is_missing_property_error(error_json: &serde_json::Value) -> bool {
     code == "validation_error" && message.contains("Could not find property with name or id")
 }
 
-/// PageObject から NotionEvent に変換する
-pub fn parse_event(page: &PageObject, database_id: &str) -> Option<NotionEvent> {
+/// PageObject から NotionEvent に変換する（プロパティ名指定版）
+pub fn parse_event_with_keys(
+    page: &PageObject,
+    database_id: &str,
+    title_property: Option<&str>,
+    date_property: Option<&str>,
+) -> Option<NotionEvent> {
     let props = &page.properties;
 
-    // タイトルを取得（"名前" or "Name" プロパティ）
-    let title = extract_title(props)?;
+    let title = extract_title_with_key(props, title_property)?;
 
-    // 日付を取得（"日付" or "Date" プロパティ）
-    let (date_start, datetime_start, datetime_end, is_all_day) = extract_date(props)?;
+    let (date_start, datetime_start, datetime_end, is_all_day) =
+        extract_date_with_key(props, date_property)?;
 
     Some(NotionEvent {
         id: page.id.clone(),
@@ -135,9 +139,19 @@ pub fn parse_event(page: &PageObject, database_id: &str) -> Option<NotionEvent> 
     })
 }
 
-fn extract_title(props: &serde_json::Value) -> Option<String> {
-    for key in &["名前", "Name", "title", "Title"] {
-        if let Some(title_prop) = props.get(key) {
+/// 後方互換ラッパー
+pub fn parse_event(page: &PageObject, database_id: &str) -> Option<NotionEvent> {
+    parse_event_with_keys(page, database_id, None, None)
+}
+
+fn extract_title_with_key(props: &serde_json::Value, key: Option<&str>) -> Option<String> {
+    let candidates: Vec<&str> = if let Some(k) = key {
+        vec![k]
+    } else {
+        vec!["名前", "Name", "title", "Title"]
+    };
+    for key in &candidates {
+        if let Some(title_prop) = props.get(*key) {
             if let Some(arr) = title_prop["title"].as_array() {
                 let text: String = arr
                     .iter()
@@ -152,16 +166,22 @@ fn extract_title(props: &serde_json::Value) -> Option<String> {
     None
 }
 
-fn extract_date(
+fn extract_date_with_key(
     props: &serde_json::Value,
+    key: Option<&str>,
 ) -> Option<(
     Option<chrono::NaiveDate>,
     Option<chrono::DateTime<chrono::Utc>>,
     Option<chrono::DateTime<chrono::Utc>>,
     bool,
 )> {
-    for key in &["日付", "Date", "date"] {
-        if let Some(date_prop) = props.get(key) {
+    let candidates: Vec<&str> = if let Some(k) = key {
+        vec![k]
+    } else {
+        vec!["日付", "Date", "date"]
+    };
+    for key in &candidates {
+        if let Some(date_prop) = props.get(*key) {
             if let Some(start_str) = date_prop["date"]["start"].as_str() {
                 // 日付のみ（YYYY-MM-DD）か日時（YYYY-MM-DDTHH:MM:SS...）か判定
                 if start_str.len() == 10 {
@@ -230,6 +250,38 @@ mod tests {
         }));
         let event = parse_event(&page, "db-1");
         assert!(event.is_none());
+    }
+
+    #[test]
+    fn test_parse_event_with_custom_title_property() {
+        let page = make_page(json!({
+            "タスク名": { "title": [{ "plain_text": "カスタムタイトル" }] },
+            "Date": { "date": { "start": "2026-03-05" } }
+        }));
+        let event = parse_event_with_keys(&page, "db-1", Some("タスク名"), Some("Date"));
+        assert!(event.is_some());
+        assert_eq!(event.unwrap().title, "カスタムタイトル");
+    }
+
+    #[test]
+    fn test_parse_event_with_custom_date_property() {
+        let page = make_page(json!({
+            "Name": { "title": [{ "plain_text": "イベント" }] },
+            "開催日": { "date": { "start": "2026-03-05" } }
+        }));
+        let event = parse_event_with_keys(&page, "db-1", Some("Name"), Some("開催日"));
+        assert!(event.is_some());
+        assert!(event.unwrap().is_all_day);
+    }
+
+    #[test]
+    fn test_parse_event_with_keys_none_falls_back() {
+        let page = make_page(json!({
+            "Name": { "title": [{ "plain_text": "テスト" }] },
+            "Date": { "date": { "start": "2026-03-05" } }
+        }));
+        let event = parse_event_with_keys(&page, "db-1", None, None);
+        assert!(event.is_some());
     }
 
     #[test]
