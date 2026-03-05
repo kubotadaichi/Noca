@@ -2,6 +2,13 @@
 name = "noca"
 version = "0.1.0"
 edition = "2021"
+description = "Notion Database weekly-view TUI calendar client"
+license = "MIT"
+repository = "https://github.com/kubotadaichi/Noca"
+homepage = "https://github.com/kubotadaichi/Noca"
+readme = "README.md"
+keywords = ["notion", "tui", "calendar", "cli"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 ratatui = "0.29"
