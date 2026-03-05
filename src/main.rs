@@ -15,6 +15,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     Terminal,
 };
+use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
 
@@ -112,19 +113,24 @@ async fn fetch_events(
         .to_string();
 
     state.loading = true;
+    let mut fetched_events: HashMap<chrono::NaiveDate, Vec<api::models::NotionEvent>> =
+        HashMap::new();
+    let mut had_success = false;
 
     for db in databases {
         match client.query_database(&db.id, &start_str, &end_str).await {
             Ok(pages) => {
+                had_success = true;
                 for page in &pages {
-                    if let Some(event) = api::parse_event(page, &db.id) {
+                    if let Some(mut event) = api::parse_event(page, &db.id) {
+                        event.color = Some(db.color.clone());
                         let date = event.date_start.or_else(|| {
                             event
                                 .datetime_start
                                 .map(|dt| dt.with_timezone(&chrono::Local).date_naive())
                         });
                         if let Some(d) = date {
-                            state.events.entry(d).or_default().push(event);
+                            fetched_events.entry(d).or_default().push(event);
                         }
                     }
                 }
@@ -133,6 +139,11 @@ async fn fetch_events(
                 state.status_message = Some(format!("API Error: {}", e));
             }
         }
+    }
+
+    if had_success {
+        state.replace_events(fetched_events);
+        state.status_message = None;
     }
 
     state.loading = false;

@@ -1,7 +1,7 @@
 use crate::api::models::NotionEvent;
 use crate::config::DatabaseConfig;
 use chrono::{Datelike, Local, NaiveDate};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActivePanel {
@@ -88,6 +88,23 @@ impl AppState {
             .map(|v| v.iter().collect())
             .unwrap_or_default()
     }
+
+    pub fn replace_events(&mut self, events: HashMap<NaiveDate, Vec<NotionEvent>>) {
+        let mut deduped = HashMap::new();
+        for (date, date_events) in events {
+            let mut seen_ids = HashSet::new();
+            let mut unique_events = Vec::new();
+            for event in date_events {
+                if seen_ids.insert(event.id.clone()) {
+                    unique_events.push(event);
+                }
+            }
+            if !unique_events.is_empty() {
+                deduped.insert(date, unique_events);
+            }
+        }
+        self.events = deduped;
+    }
 }
 
 pub fn week_start_of(date: NaiveDate) -> NaiveDate {
@@ -98,6 +115,20 @@ pub fn week_start_of(date: NaiveDate) -> NaiveDate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::models::NotionEvent;
+
+    fn make_event(id: &str, title: &str, date: NaiveDate) -> NotionEvent {
+        NotionEvent {
+            id: id.to_string(),
+            title: title.to_string(),
+            date_start: Some(date),
+            datetime_start: None,
+            datetime_end: None,
+            is_all_day: true,
+            database_id: "db".to_string(),
+            color: None,
+        }
+    }
 
     #[test]
     fn test_week_start_of_thursday() {
@@ -137,5 +168,33 @@ mod tests {
         assert_eq!(state.active_panel, ActivePanel::Sidebar);
         state.toggle_panel();
         assert_eq!(state.active_panel, ActivePanel::Calendar);
+    }
+
+    #[test]
+    fn test_replace_events_deduplicates_and_replaces_old_data() {
+        let mut state = AppState::new(vec![]);
+        let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+
+        state
+            .events
+            .insert(day, vec![make_event("old", "Old event", day)]);
+
+        let mut incoming = HashMap::new();
+        incoming.insert(
+            day,
+            vec![
+                make_event("e1", "Event 1", day),
+                make_event("e1", "Event 1 duplicate", day),
+                make_event("e2", "Event 2", day),
+            ],
+        );
+
+        state.replace_events(incoming);
+
+        let day_events = state.events.get(&day).unwrap();
+        assert_eq!(day_events.len(), 2);
+        assert!(day_events.iter().any(|e| e.id == "e1"));
+        assert!(day_events.iter().any(|e| e.id == "e2"));
+        assert!(!day_events.iter().any(|e| e.id == "old"));
     }
 }

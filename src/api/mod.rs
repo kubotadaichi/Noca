@@ -4,10 +4,12 @@ use anyhow::{Context, Result};
 use models::{NotionEvent, PageObject, QueryResponse};
 use reqwest::Client;
 use serde_json::json;
+use std::time::Duration;
 
 const NOTION_API_BASE: &str = "https://api.notion.com/v1";
 const NOTION_VERSION: &str = "2022-06-28";
 
+#[derive(Clone)]
 pub struct NotionClient {
     client: Client,
     token: String,
@@ -16,7 +18,10 @@ pub struct NotionClient {
 impl NotionClient {
     pub fn new(token: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(8))
+                .build()
+                .expect("failed to build reqwest client"),
             token,
         }
     }
@@ -27,18 +32,34 @@ impl NotionClient {
         start_date: &str,
         end_date: &str,
     ) -> Result<Vec<PageObject>> {
-        let _ = end_date;
         let url = format!("{}/databases/{}/query", NOTION_API_BASE, database_id);
         let body = json!({
+            "page_size": 100,
             "filter": {
                 "or": [
                     {
-                        "property": "日付",
-                        "date": { "on_or_after": start_date }
+                        "and": [
+                            {
+                                "property": "日付",
+                                "date": { "on_or_after": start_date }
+                            },
+                            {
+                                "property": "日付",
+                                "date": { "on_or_before": end_date }
+                            }
+                        ]
                     },
                     {
-                        "property": "Date",
-                        "date": { "on_or_after": start_date }
+                        "and": [
+                            {
+                                "property": "Date",
+                                "date": { "on_or_after": start_date }
+                            },
+                            {
+                                "property": "Date",
+                                "date": { "on_or_before": end_date }
+                            }
+                        ]
                     }
                 ]
             }
@@ -53,7 +74,9 @@ impl NotionClient {
             .json(&body)
             .send()
             .await
-            .context("Notion APIへの接続に失敗しました")?;
+            .context("Notion APIへの接続に失敗しました")?
+            .error_for_status()
+            .context("Notion APIがエラーを返しました")?;
 
         let query_response: QueryResponse = response
             .json()
