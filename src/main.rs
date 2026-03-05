@@ -12,7 +12,9 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Style},
+    widgets::Paragraph,
     Terminal,
 };
 use std::collections::HashMap;
@@ -63,13 +65,19 @@ async fn run_app(
 ) -> Result<()> {
     loop {
         terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(22), Constraint::Min(0)])
+            let root_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(1)])
                 .split(f.area());
 
-            ui::sidebar::render_sidebar(f, chunks[0], state);
-            ui::week_view::render_week_view(f, chunks[1], state);
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(22), Constraint::Min(0)])
+                .split(root_chunks[0]);
+
+            ui::sidebar::render_sidebar(f, main_chunks[0], state);
+            ui::week_view::render_week_view(f, main_chunks[1], state);
+            render_help_bar(f, root_chunks[1]);
         })?;
 
         if event::poll(Duration::from_millis(200))? {
@@ -99,6 +107,12 @@ async fn run_app(
         }
     }
     Ok(())
+}
+
+fn render_help_bar(f: &mut ratatui::Frame, area: Rect) {
+    let text = ui::help_text();
+    let help = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
+    f.render_widget(help, area);
 }
 
 async fn fetch_events(
