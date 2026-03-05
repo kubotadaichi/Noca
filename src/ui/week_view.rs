@@ -148,38 +148,43 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
             .collect();
 
         let slot_lines: Vec<Line> = (start_slot..start_slot + visible_slots)
-            .map(|h| {
-                if *date == today && h == current_slot {
+            .map(|s| {
+                // 現在時刻インジケーター
+                if *date == today && s == current_slot {
                     return Line::from(Span::styled(
                         "─".repeat(cols[col_idx + 1].width as usize),
                         Style::default().fg(Color::Red),
                     ));
                 }
 
-                let event = timed_events.iter().find(|e| {
-                    if let Some(dt) = e.datetime_start {
-                        let local_dt = dt.with_timezone(&chrono::Local);
-                        local_dt.hour() as usize == h
+                let slot_h = s / 4;
+                let slot_m = (s % 4) * 15;
+                let slot_total_min = slot_h * 60 + slot_m; // スロット開始（分）
+                let slot_end_min = slot_total_min + 15; // スロット終了（分）
+
+                // このスロットに重なるイベントを探す
+                let active_event = timed_events.iter().find(|e| {
+                    if let Some(dt_start) = e.datetime_start {
+                        let local_start = dt_start.with_timezone(&chrono::Local);
+                        let start_total_min =
+                            local_start.hour() as usize * 60 + local_start.minute() as usize;
+
+                        // イベント終了時刻（なければ開始+1時間とみなす）
+                        let end_total_min = if let Some(dt_end) = e.datetime_end {
+                            let local_end = dt_end.with_timezone(&chrono::Local);
+                            local_end.hour() as usize * 60 + local_end.minute() as usize
+                        } else {
+                            start_total_min + 60
+                        };
+
+                        // スロットに重なる: start < slot_end && end > slot_start
+                        start_total_min < slot_end_min && end_total_min > slot_total_min
                     } else {
                         false
                     }
                 });
 
-                if let Some(ev) = event {
-                    let end_str = ev
-                        .datetime_end
-                        .map(|dt| {
-                            let local = dt.with_timezone(&chrono::Local);
-                            format!("–{:02}:{:02}", local.hour(), local.minute())
-                        })
-                        .unwrap_or_default();
-                    let label = format!("{}{}", &ev.title, end_str);
-                    let col_width = cols[col_idx + 1].width as usize;
-                    let truncated = if label.len() > col_width {
-                        label.chars().take(col_width.saturating_sub(1)).collect::<String>() + "…"
-                    } else {
-                        label
-                    };
+                if let Some(ev) = active_event {
                     let event_color = ev
                         .color
                         .as_deref()
@@ -192,22 +197,70 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
                         .map(|db| db.event_style.as_str())
                         .unwrap_or("block");
 
-                    match event_style_str {
-                        "text" => Line::from(Span::styled(
-                            truncated,
-                            Style::default().fg(event_color).add_modifier(Modifier::BOLD),
-                        )),
-                        "bar" => Line::from(vec![
-                            Span::styled("▌", Style::default().fg(event_color)),
-                            Span::styled(truncated, Style::default().add_modifier(Modifier::BOLD)),
-                        ]),
-                        _ => Line::from(Span::styled(
-                            truncated,
-                            Style::default()
-                                .bg(event_color)
-                                .fg(Color::Black)
-                                .add_modifier(Modifier::BOLD),
-                        )),
+                    // このスロットが開始スロットかどうか判定
+                    let is_start_slot = if let Some(dt_start) = ev.datetime_start {
+                        let local_start = dt_start.with_timezone(&chrono::Local);
+                        let start_total_min =
+                            local_start.hour() as usize * 60 + local_start.minute() as usize;
+                        // 開始時刻がこのスロット内 [slot_total_min, slot_end_min)
+                        start_total_min >= slot_total_min && start_total_min < slot_end_min
+                    } else {
+                        false
+                    };
+
+                    if is_start_slot {
+                        // 開始スロット: タイトルを表示
+                        let end_str = ev
+                            .datetime_end
+                            .map(|dt| {
+                                let local = dt.with_timezone(&chrono::Local);
+                                format!("–{:02}:{:02}", local.hour(), local.minute())
+                            })
+                            .unwrap_or_default();
+                        let label = format!("{}{}", &ev.title, end_str);
+                        let col_width = cols[col_idx + 1].width as usize;
+                        let truncated = if label.len() > col_width {
+                            label
+                                .chars()
+                                .take(col_width.saturating_sub(1))
+                                .collect::<String>()
+                                + "…"
+                        } else {
+                            label
+                        };
+
+                        match event_style_str {
+                            "text" => Line::from(Span::styled(
+                                truncated,
+                                Style::default().fg(event_color).add_modifier(Modifier::BOLD),
+                            )),
+                            "bar" => Line::from(vec![
+                                Span::styled("▌", Style::default().fg(event_color)),
+                                Span::styled(
+                                    truncated,
+                                    Style::default().add_modifier(Modifier::BOLD),
+                                ),
+                            ]),
+                            _ => Line::from(Span::styled(
+                                truncated,
+                                Style::default()
+                                    .bg(event_color)
+                                    .fg(Color::Black)
+                                    .add_modifier(Modifier::BOLD),
+                            )),
+                        }
+                    } else {
+                        // 継続スロット: スタイルに応じたマーカーのみ
+                        match event_style_str {
+                            "bar" => {
+                                Line::from(Span::styled("▌", Style::default().fg(event_color)))
+                            }
+                            "block" => Line::from(Span::styled(
+                                " ".repeat(cols[col_idx + 1].width as usize),
+                                Style::default().bg(event_color),
+                            )),
+                            _ => Line::from(""), // text: 継続行は空白
+                        }
                     }
                 } else {
                     Line::from("")
