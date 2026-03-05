@@ -47,10 +47,16 @@ impl AppState {
 
     pub fn select_next_day(&mut self) {
         self.selected_date += chrono::Duration::days(1);
+        if self.selected_date >= self.current_week_start + chrono::Duration::weeks(1) {
+            self.current_week_start += chrono::Duration::weeks(1);
+        }
     }
 
     pub fn select_prev_day(&mut self) {
         self.selected_date -= chrono::Duration::days(1);
+        if self.selected_date < self.current_week_start {
+            self.current_week_start -= chrono::Duration::weeks(1);
+        }
     }
 
     pub fn go_to_today(&mut self) {
@@ -196,5 +202,45 @@ mod tests {
         assert!(day_events.iter().any(|e| e.id == "e1"));
         assert!(day_events.iter().any(|e| e.id == "e2"));
         assert!(!day_events.iter().any(|e| e.id == "old"));
+    }
+
+    #[test]
+    fn test_select_next_day_follows_week() {
+        let mut state = AppState::new(vec![]);
+        let week_end = state.current_week_start + chrono::Duration::days(6);
+        state.selected_date = week_end;
+        let initial_week = state.current_week_start;
+
+        state.select_next_day();
+
+        assert_eq!(
+            state.current_week_start,
+            initial_week + chrono::Duration::weeks(1)
+        );
+    }
+
+    #[test]
+    fn test_select_prev_day_follows_week() {
+        let mut state = AppState::new(vec![]);
+        state.selected_date = state.current_week_start;
+        let initial_week = state.current_week_start;
+
+        state.select_prev_day();
+
+        assert_eq!(
+            state.current_week_start,
+            initial_week - chrono::Duration::weeks(1)
+        );
+    }
+
+    #[test]
+    fn test_select_next_day_within_week_does_not_change_week() {
+        let mut state = AppState::new(vec![]);
+        state.selected_date = state.current_week_start + chrono::Duration::days(2);
+        let initial_week = state.current_week_start;
+
+        state.select_next_day();
+
+        assert_eq!(state.current_week_start, initial_week);
     }
 }

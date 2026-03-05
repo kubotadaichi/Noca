@@ -94,8 +94,20 @@ async fn run_app(
                     }
                     KeyCode::Char('j') => state.scroll_down(),
                     KeyCode::Char('k') => state.scroll_up(),
-                    KeyCode::Char('H') => state.select_prev_day(),
-                    KeyCode::Char('L') => state.select_next_day(),
+                    KeyCode::Char('H') => {
+                        let week_before = state.current_week_start;
+                        state.select_prev_day();
+                        if state.current_week_start != week_before {
+                            fetch_events(client, state, databases).await;
+                        }
+                    }
+                    KeyCode::Char('L') => {
+                        let week_before = state.current_week_start;
+                        state.select_next_day();
+                        if state.current_week_start != week_before {
+                            fetch_events(client, state, databases).await;
+                        }
+                    }
                     KeyCode::Char('t') => {
                         state.go_to_today();
                         fetch_events(client, state, databases).await;
