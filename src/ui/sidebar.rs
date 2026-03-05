@@ -77,7 +77,7 @@ fn render_db_list(f: &mut Frame, area: Rect, state: &AppState) {
         .databases
         .iter()
         .map(|db| {
-            let color = color_from_str(&db.color);
+            let color = crate::ui::color_from_str(&db.color);
             ListItem::new(Line::from(vec![
                 Span::styled("■ ", Style::default().fg(color)),
                 Span::raw(&db.name),
@@ -87,18 +87,6 @@ fn render_db_list(f: &mut Frame, area: Rect, state: &AppState) {
 
     let list = List::new(items).block(Block::default().title("Notion").borders(Borders::NONE));
     f.render_widget(list, area);
-}
-
-fn color_from_str(s: &str) -> Color {
-    match s {
-        "red" => Color::Red,
-        "green" => Color::Green,
-        "yellow" => Color::Yellow,
-        "blue" => Color::Blue,
-        "magenta" => Color::Magenta,
-        "cyan" => Color::Cyan,
-        _ => Color::White,
-    }
 }
 
 fn days_in_month(year: i32, month: u32) -> u32 {

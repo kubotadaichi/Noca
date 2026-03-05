@@ -1,8 +1,22 @@
+use ratatui::style::Color;
+
 pub mod sidebar;
 pub mod week_view;
 
 pub fn help_text() -> &'static str {
     "[h/l]週移動  [j/k]スクロール  [H/L]日選択  [t]今日  [Tab]切替  [q]終了"
+}
+
+pub fn color_from_str(s: &str) -> Color {
+    match s {
+        "red" => Color::Red,
+        "green" => Color::Green,
+        "yellow" => Color::Yellow,
+        "blue" => Color::Blue,
+        "magenta" => Color::Magenta,
+        "cyan" => Color::Cyan,
+        _ => Color::White,
+    }
 }
 
 #[cfg(test)]

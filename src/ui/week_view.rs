@@ -68,15 +68,23 @@ fn render_all_day_row(f: &mut Frame, area: Rect, state: &AppState) {
     );
 
     for (i, date) in week_dates.iter().enumerate() {
-        let all_day_events: Vec<&str> = state
-            .events_for_date(date)
+        let date_events = state.events_for_date(date);
+        let all_day_events: Vec<&str> = date_events
             .into_iter()
             .filter(|e| e.is_all_day)
             .map(|e| e.title.as_str())
             .collect();
 
         let text = all_day_events.join(", ");
-        let style = Style::default().fg(Color::Cyan);
+        let event_color = state
+            .events_for_date(date)
+            .into_iter()
+            .filter(|e| e.is_all_day)
+            .next()
+            .and_then(|e| e.color.as_deref())
+            .map(crate::ui::color_from_str)
+            .unwrap_or(Color::Cyan);
+        let style = Style::default().fg(event_color);
         f.render_widget(
             Paragraph::new(Span::styled(
                 if text.len() > cols[i + 1].width as usize {
@@ -158,19 +166,41 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
                         })
                         .unwrap_or_default();
                     let label = format!("{}{}", &ev.title, end_str);
-                    let truncated = if label.len() > cols[col_idx + 1].width as usize {
-                        label
-                            .chars()
-                            .take(cols[col_idx + 1].width as usize - 1)
-                            .collect::<String>()
-                            + "…"
+                    let col_width = cols[col_idx + 1].width as usize;
+                    let truncated = if label.len() > col_width {
+                        label.chars().take(col_width.saturating_sub(1)).collect::<String>() + "…"
                     } else {
                         label
                     };
-                    Line::from(Span::styled(
-                        truncated,
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                    ))
+                    let event_color = ev
+                        .color
+                        .as_deref()
+                        .map(crate::ui::color_from_str)
+                        .unwrap_or(Color::Green);
+                    let event_style_str = state
+                        .databases
+                        .iter()
+                        .find(|db| db.id == ev.database_id)
+                        .map(|db| db.event_style.as_str())
+                        .unwrap_or("block");
+
+                    match event_style_str {
+                        "text" => Line::from(Span::styled(
+                            truncated,
+                            Style::default().fg(event_color).add_modifier(Modifier::BOLD),
+                        )),
+                        "bar" => Line::from(vec![
+                            Span::styled("▌", Style::default().fg(event_color)),
+                            Span::styled(truncated, Style::default().add_modifier(Modifier::BOLD)),
+                        ]),
+                        _ => Line::from(Span::styled(
+                            truncated,
+                            Style::default()
+                                .bg(event_color)
+                                .fg(Color::Black)
+                                .add_modifier(Modifier::BOLD),
+                        )),
+                    }
                 } else {
                     Line::from("")
                 }
