@@ -18,7 +18,7 @@ pub struct AppState {
     pub active_panel: ActivePanel,
     pub loading: bool,
     pub status_message: Option<String>,
-    pub scroll_offset: u16, // 時間スロットのスクロール位置（時間単位）
+    pub scroll_offset: u16, // 時間スロットのスクロール位置（15分単位）
 }
 
 impl AppState {
@@ -33,7 +33,7 @@ impl AppState {
             active_panel: ActivePanel::Calendar,
             loading: false,
             status_message: None,
-            scroll_offset: 7, // デフォルト07:00から表示
+            scroll_offset: 28, // デフォルト07:00から表示（7 * 4 = 28）
         }
     }
 
@@ -70,7 +70,7 @@ impl AppState {
     }
 
     pub fn scroll_down(&mut self) {
-        if self.scroll_offset < 22 {
+        if self.scroll_offset < 88 {
             self.scroll_offset += 1;
         }
     }
@@ -174,6 +174,44 @@ mod tests {
         assert_eq!(state.active_panel, ActivePanel::Sidebar);
         state.toggle_panel();
         assert_eq!(state.active_panel, ActivePanel::Calendar);
+    }
+
+    #[test]
+    fn test_scroll_offset_initial_is_28() {
+        let state = AppState::new(vec![]);
+        assert_eq!(state.scroll_offset, 28); // 07:00 = 7 * 4
+    }
+
+    #[test]
+    fn test_scroll_down_increments_by_one_slot() {
+        let mut state = AppState::new(vec![]);
+        let initial = state.scroll_offset;
+        state.scroll_down();
+        assert_eq!(state.scroll_offset, initial + 1);
+    }
+
+    #[test]
+    fn test_scroll_down_caps_at_88() {
+        let mut state = AppState::new(vec![]);
+        state.scroll_offset = 88;
+        state.scroll_down();
+        assert_eq!(state.scroll_offset, 88); // 22:00 を超えない
+    }
+
+    #[test]
+    fn test_scroll_up_decrements_by_one_slot() {
+        let mut state = AppState::new(vec![]);
+        state.scroll_offset = 10;
+        state.scroll_up();
+        assert_eq!(state.scroll_offset, 9);
+    }
+
+    #[test]
+    fn test_scroll_up_does_not_underflow() {
+        let mut state = AppState::new(vec![]);
+        state.scroll_offset = 0;
+        state.scroll_up();
+        assert_eq!(state.scroll_offset, 0);
     }
 
     #[test]
