@@ -7,6 +7,16 @@ pub fn help_text() -> &'static str {
     "[h/l]週移動  [j/k]スクロール  [H/L]日選択  [t]今日  [Tab]切替  [q]終了"
 }
 
+pub fn status_bar_text(loading: bool, error: Option<&str>) -> String {
+    if let Some(msg) = error {
+        format!("✗ {}", msg)
+    } else if loading {
+        "読み込み中...".to_string()
+    } else {
+        help_text().to_string()
+    }
+}
+
 pub fn color_from_str(s: &str) -> Color {
     match s {
         "red" => Color::Red,
@@ -21,7 +31,7 @@ pub fn color_from_str(s: &str) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::help_text;
+    use super::{help_text, status_bar_text};
 
     #[test]
     fn test_help_text_contains_main_keybindings() {
@@ -32,5 +42,23 @@ mod tests {
         assert!(text.contains("[t]"));
         assert!(text.contains("[Tab]"));
         assert!(text.contains("[q]"));
+    }
+
+    #[test]
+    fn test_status_bar_loading() {
+        let text = status_bar_text(true, None);
+        assert!(text.contains("読み込み中"));
+    }
+
+    #[test]
+    fn test_status_bar_error() {
+        let text = status_bar_text(false, Some("API Error: 401"));
+        assert!(text.contains("API Error: 401"));
+    }
+
+    #[test]
+    fn test_status_bar_normal() {
+        let text = status_bar_text(false, None);
+        assert!(text.contains("[h/l]"));
     }
 }

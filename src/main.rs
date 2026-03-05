@@ -77,7 +77,7 @@ async fn run_app(
 
             ui::sidebar::render_sidebar(f, main_chunks[0], state);
             ui::week_view::render_week_view(f, main_chunks[1], state);
-            render_help_bar(f, root_chunks[1]);
+            render_status_bar(f, root_chunks[1], state);
         })?;
 
         if event::poll(Duration::from_millis(200))? {
@@ -121,10 +121,17 @@ async fn run_app(
     Ok(())
 }
 
-fn render_help_bar(f: &mut ratatui::Frame, area: Rect) {
-    let text = ui::help_text();
-    let help = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
-    f.render_widget(help, area);
+fn render_status_bar(f: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let error = state.status_message.as_deref();
+    let text = ui::status_bar_text(state.loading, error);
+    let style = if error.is_some() {
+        Style::default().fg(Color::Red)
+    } else if state.loading {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    f.render_widget(Paragraph::new(text).style(style), area);
 }
 
 async fn fetch_events(
