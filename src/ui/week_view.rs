@@ -105,10 +105,12 @@ fn render_all_day_row(f: &mut Frame, area: Rect, state: &AppState) {
 fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
     let now = Local::now();
     let today = now.date_naive();
-    let current_hour = now.hour();
+    let current_hour = now.hour() as usize;
+    let current_minute = now.minute() as usize;
+    let current_slot = current_hour * 4 + current_minute / 15;
 
-    let visible_hours = area.height as usize;
-    let start_hour = state.scroll_offset as usize;
+    let visible_slots = area.height as usize;
+    let start_slot = state.scroll_offset as usize;
 
     let mut constraints = vec![Constraint::Length(6)];
     constraints.extend(vec![Constraint::Min(1); 7]);
@@ -120,14 +122,20 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
 
     let week_dates = state.week_dates();
 
-    let time_labels: Vec<Line> = (start_hour..start_hour + visible_hours)
-        .map(|h| {
-            let style = if h == current_hour as usize {
-                Style::default().fg(Color::Red)
+    // 時間ラベル列: :00のスロットのみ時刻表示、それ以外は空白
+    let time_labels: Vec<Line> = (start_slot..start_slot + visible_slots)
+        .map(|s| {
+            let h = s / 4;
+            if s % 4 == 0 {
+                let style = if h == current_hour {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(Span::styled(format!("{:02}:00", h % 24), style))
             } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            Line::from(Span::styled(format!("{:02}:00", h % 24), style))
+                Line::from("")
+            }
         })
         .collect();
     f.render_widget(Paragraph::new(time_labels), cols[0]);
@@ -139,9 +147,9 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
             .filter(|e| !e.is_all_day)
             .collect();
 
-        let slot_lines: Vec<Line> = (start_hour..start_hour + visible_hours)
+        let slot_lines: Vec<Line> = (start_slot..start_slot + visible_slots)
             .map(|h| {
-                if *date == today && h == current_hour as usize {
+                if *date == today && h == current_slot {
                     return Line::from(Span::styled(
                         "─".repeat(cols[col_idx + 1].width as usize),
                         Style::default().fg(Color::Red),
