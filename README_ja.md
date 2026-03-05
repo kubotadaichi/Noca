@@ -1,4 +1,4 @@
-[日本語版はこちら](README_ja.md)
+[English](README.md)
 
 # Noca
 
