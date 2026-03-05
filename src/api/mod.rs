@@ -1,6 +1,6 @@
 pub mod models;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use models::{NotionEvent, PageObject, QueryResponse};
 use reqwest::Client;
 use serde_json::json;
@@ -33,58 +33,84 @@ impl NotionClient {
         end_date: &str,
     ) -> Result<Vec<PageObject>> {
         let url = format!("{}/databases/{}/query", NOTION_API_BASE, database_id);
-        let body = json!({
-            "page_size": 100,
-            "filter": {
-                "or": [
-                    {
-                        "and": [
-                            {
-                                "property": "日付",
-                                "date": { "on_or_after": start_date }
-                            },
-                            {
-                                "property": "日付",
-                                "date": { "on_or_before": end_date }
-                            }
-                        ]
-                    },
-                    {
-                        "and": [
-                            {
-                                "property": "Date",
-                                "date": { "on_or_after": start_date }
-                            },
-                            {
-                                "property": "Date",
-                                "date": { "on_or_before": end_date }
-                            }
-                        ]
-                    }
-                ]
+        for date_property in ["Date", "日付"] {
+            let body = build_query_body(date_property, start_date, end_date);
+            let response = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("Notion-Version", NOTION_VERSION)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .context("Notion APIへの接続に失敗しました")?;
+
+            let status = response.status();
+            let raw = response
+                .text()
+                .await
+                .context("Notion APIレスポンスの読み取りに失敗しました")?;
+
+            if status.is_success() {
+                let query_response: QueryResponse =
+                    serde_json::from_str(&raw).context("Notion APIレスポンスのパースに失敗しました")?;
+                return Ok(query_response.results);
             }
-        });
 
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("Notion-Version", NOTION_VERSION)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .context("Notion APIへの接続に失敗しました")?
-            .error_for_status()
-            .context("Notion APIがエラーを返しました")?;
+            let error_json: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
+                json!({
+                    "code": "unknown_error",
+                    "message": raw,
+                })
+            });
 
-        let query_response: QueryResponse = response
-            .json()
-            .await
-            .context("Notion APIレスポンスのパースに失敗しました")?;
+            if is_missing_property_error(&error_json) {
+                continue;
+            }
 
-        Ok(query_response.results)
+            let message = error_json
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown error");
+            return Err(anyhow!("Notion APIがエラーを返しました ({}): {}", status, message));
+        }
+
+        Err(anyhow!(
+            "Notion DBに対応する日付プロパティが見つかりません（Date/日付）"
+        ))
     }
+}
+
+fn build_query_body(date_property: &str, start_date: &str, end_date: &str) -> serde_json::Value {
+    json!({
+        "page_size": 100,
+        "filter": {
+            "and": [
+                {
+                    "property": date_property,
+                    "date": { "on_or_after": start_date }
+                },
+                {
+                    "property": date_property,
+                    "date": { "on_or_before": end_date }
+                }
+            ]
+        }
+    })
+}
+
+fn is_missing_property_error(error_json: &serde_json::Value) -> bool {
+    let code = error_json
+        .get("code")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let message = error_json
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    code == "validation_error" && message.contains("Could not find property with name or id")
 }
 
 /// PageObject から NotionEvent に変換する
@@ -204,5 +230,31 @@ mod tests {
         }));
         let event = parse_event(&page, "db-1");
         assert!(event.is_none());
+    }
+
+    #[test]
+    fn test_build_query_body_uses_selected_date_property() {
+        let body = build_query_body("Date", "2025-12-11", "2025-12-11");
+        assert_eq!(body["filter"]["and"][0]["property"], "Date");
+        assert_eq!(body["filter"]["and"][1]["property"], "Date");
+    }
+
+    #[test]
+    fn test_is_missing_property_error() {
+        let err = json!({
+            "object": "error",
+            "status": 400,
+            "code": "validation_error",
+            "message": "Could not find property with name or id: 日付"
+        });
+        assert!(is_missing_property_error(&err));
+
+        let other = json!({
+            "object": "error",
+            "status": 401,
+            "code": "unauthorized",
+            "message": "Invalid token"
+        });
+        assert!(!is_missing_property_error(&other));
     }
 }
