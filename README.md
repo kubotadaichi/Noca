@@ -2,7 +2,7 @@
 
 # Noca
 
-A read-only TUI calendar client for Notion Databases, written in Rust. View your Notion events in a weekly layout right in your terminal.
+A TUI calendar client for Notion Databases, written in Rust. View, create, edit, and delete your Notion events in a weekly layout right in your terminal.
 
 ## Installation
 
@@ -34,6 +34,7 @@ brew untap kubotadaichi/noca  # also remove the tap
 - Left panel: mini month calendar + database list
 - Right panel: weekly view (all-day row + time slots in 15-minute increments)
 - Keyboard navigation for week/day movement and scrolling
+- Create, edit, and delete events directly from the TUI
 - Auto-fallback for Notion date properties: tries `Date` then `日付`
 
 ## Requirements
@@ -59,6 +60,13 @@ integration_token = "secret_xxx"
 id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 name = "My Calendar"
 color = "green"
+# Optional: override property names if your DB uses custom names
+# date_property = "日付"
+# title_property = "タスク名"
+
+# Optional: default select property values applied when creating a new event
+[databases.create_profile.select]
+# GTD = "🕑Remind"
 ```
 
 ## Usage
@@ -75,14 +83,29 @@ rustup run stable cargo run
 
 ## Keybindings
 
+### Normal mode
+
 | Key | Action |
 |-----|--------|
 | `h` / `l` | Previous / next week |
-| `j` / `k` | Scroll time slots down / up |
+| `j` / `k` | Move cursor up / down (time slots) |
 | `H` / `L` | Select previous / next day |
 | `t` | Go to today |
 | `Tab` | Toggle sidebar / calendar focus |
+| `n` | Open create form (pre-fills selected date & cursor time) |
+| `e` | Open edit form for event at cursor |
+| `dd` | Delete event at cursor (prompts for confirmation) |
 | `q` | Quit |
+
+### Form mode (`n` / `e`)
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Next / previous field |
+| `Space` | Toggle all-day (when All-Day field is focused) |
+| `←` / `→` | Switch database (when DB field is focused) |
+| `Enter` | Save |
+| `Esc` | Cancel |
 
 ## Troubleshooting
 
@@ -113,7 +136,6 @@ rustup run stable cargo test
 rustup run stable cargo build
 ```
 
-## Current Limitations (MVP)
+## Current Limitations
 
-- Read-only (no create / edit / delete)
 - No OAuth support (Integration Token only)
