@@ -111,6 +111,8 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
 
     let visible_slots = area.height as usize;
     let start_slot = state.scroll_offset as usize;
+    let cursor_slot_start = state.cursor_hour as usize * 4;
+    let cursor_slot_end = cursor_slot_start + 4;
 
     let mut constraints = vec![Constraint::Length(6)];
     constraints.extend(vec![Constraint::Min(1); 7]);
@@ -125,10 +127,14 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
     // 時間ラベル列: :00のスロットのみ時刻表示、それ以外は空白
     let time_labels: Vec<Line> = (start_slot..start_slot + visible_slots)
         .map(|s| {
-            let h = s / 4;
             if s % 4 == 0 {
+                let h = s / 4;
                 let style = if h == current_hour {
                     Style::default().fg(Color::Red)
+                } else if s >= cursor_slot_start && s < cursor_slot_end {
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
@@ -149,6 +155,8 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
 
         let slot_lines: Vec<Line> = (start_slot..start_slot + visible_slots)
             .map(|s| {
+                let is_cursor_row =
+                    s >= cursor_slot_start && s < cursor_slot_end && *date == state.selected_date;
                 // 現在時刻インジケーター
                 if *date == today && s == current_slot {
                     return Line::from(Span::styled(
@@ -262,6 +270,11 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
                             _ => Line::from(""), // text: 継続行は空白
                         }
                     }
+                } else if is_cursor_row {
+                    Line::from(Span::styled(
+                        " ".repeat(cols[col_idx + 1].width as usize),
+                        Style::default().bg(Color::DarkGray),
+                    ))
                 } else {
                     Line::from("")
                 }
