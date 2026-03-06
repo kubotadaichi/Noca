@@ -80,6 +80,96 @@ impl NotionClient {
             "Notion DBに対応する日付プロパティが見つかりません（Date/日付）"
         ))
     }
+
+    pub async fn create_page(
+        &self,
+        database_id: &str,
+        title: &str,
+        date_start: &str,
+        date_end: Option<&str>,
+        title_prop: &str,
+        date_prop: &str,
+    ) -> Result<String> {
+        let url = format!("{}/pages", NOTION_API_BASE);
+        let body = build_create_body(database_id, title, date_start, date_end, title_prop, date_prop);
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Notion-Version", NOTION_VERSION)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Notion APIへの接続に失敗しました")?;
+
+        let status = response.status();
+        let raw = response.text().await.context("レスポンス読み取り失敗")?;
+        if !status.is_success() {
+            let err: serde_json::Value = serde_json::from_str(&raw).unwrap_or(json!({}));
+            let msg = err["message"].as_str().unwrap_or("unknown error");
+            return Err(anyhow!("ページ作成に失敗しました ({}): {}", status, msg));
+        }
+        let page: serde_json::Value = serde_json::from_str(&raw).context("レスポンスのパース失敗")?;
+        let id = page["id"].as_str().context("ページIDが取得できませんでした")?;
+        Ok(id.to_string())
+    }
+
+    pub async fn update_page(
+        &self,
+        page_id: &str,
+        title: &str,
+        date_start: &str,
+        date_end: Option<&str>,
+        title_prop: &str,
+        date_prop: &str,
+    ) -> Result<()> {
+        let url = format!("{}/pages/{}", NOTION_API_BASE, page_id);
+        let body = build_update_body(title, date_start, date_end, title_prop, date_prop);
+        let response = self
+            .client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Notion-Version", NOTION_VERSION)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Notion APIへの接続に失敗しました")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let raw = response.text().await.unwrap_or_default();
+            let err: serde_json::Value = serde_json::from_str(&raw).unwrap_or(json!({}));
+            let msg = err["message"].as_str().unwrap_or("unknown error");
+            return Err(anyhow!("ページ更新に失敗しました ({}): {}", status, msg));
+        }
+        Ok(())
+    }
+
+    pub async fn archive_page(&self, page_id: &str) -> Result<()> {
+        let url = format!("{}/pages/{}", NOTION_API_BASE, page_id);
+        let body = json!({ "archived": true });
+        let response = self
+            .client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Notion-Version", NOTION_VERSION)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Notion APIへの接続に失敗しました")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let raw = response.text().await.unwrap_or_default();
+            let err: serde_json::Value = serde_json::from_str(&raw).unwrap_or(json!({}));
+            let msg = err["message"].as_str().unwrap_or("unknown error");
+            return Err(anyhow!("ページ削除に失敗しました ({}): {}", status, msg));
+        }
+        Ok(())
+    }
 }
 
 fn build_query_body(date_property: &str, start_date: &str, end_date: &str) -> serde_json::Value {
@@ -96,6 +186,56 @@ fn build_query_body(date_property: &str, start_date: &str, end_date: &str) -> se
                     "date": { "on_or_before": end_date }
                 }
             ]
+        }
+    })
+}
+
+fn build_create_body(
+    database_id: &str,
+    title: &str,
+    date_start: &str,
+    date_end: Option<&str>,
+    title_prop: &str,
+    date_prop: &str,
+) -> serde_json::Value {
+    let date_value = if let Some(end) = date_end {
+        json!({ "start": date_start, "end": end })
+    } else {
+        json!({ "start": date_start, "end": serde_json::Value::Null })
+    };
+    json!({
+        "parent": { "database_id": database_id },
+        "properties": {
+            title_prop: {
+                "title": [{ "text": { "content": title } }]
+            },
+            date_prop: {
+                "date": date_value
+            }
+        }
+    })
+}
+
+fn build_update_body(
+    title: &str,
+    date_start: &str,
+    date_end: Option<&str>,
+    title_prop: &str,
+    date_prop: &str,
+) -> serde_json::Value {
+    let date_value = if let Some(end) = date_end {
+        json!({ "start": date_start, "end": end })
+    } else {
+        json!({ "start": date_start, "end": serde_json::Value::Null })
+    };
+    json!({
+        "properties": {
+            title_prop: {
+                "title": [{ "text": { "content": title } }]
+            },
+            date_prop: {
+                "date": date_value
+            }
         }
     })
 }
@@ -308,5 +448,56 @@ mod tests {
             "message": "Invalid token"
         });
         assert!(!is_missing_property_error(&other));
+    }
+
+    #[test]
+    fn test_build_create_body_all_day() {
+        let body = build_create_body("db-id", "Meeting", "2026-03-06", None, "Name", "Date");
+        assert_eq!(body["parent"]["database_id"], "db-id");
+        assert_eq!(
+            body["properties"]["Name"]["title"][0]["text"]["content"],
+            "Meeting"
+        );
+        assert_eq!(body["properties"]["Date"]["date"]["start"], "2026-03-06");
+        assert!(body["properties"]["Date"]["date"]["end"].is_null());
+    }
+
+    #[test]
+    fn test_build_create_body_timed() {
+        let body = build_create_body(
+            "db-id",
+            "Meeting",
+            "2026-03-06T10:00:00+09:00",
+            Some("2026-03-06T11:00:00+09:00"),
+            "Name",
+            "Date",
+        );
+        assert_eq!(
+            body["properties"]["Date"]["date"]["start"],
+            "2026-03-06T10:00:00+09:00"
+        );
+        assert_eq!(
+            body["properties"]["Date"]["date"]["end"],
+            "2026-03-06T11:00:00+09:00"
+        );
+    }
+
+    #[test]
+    fn test_build_update_body() {
+        let body = build_update_body("Updated", "2026-03-07", None, "Name", "Date");
+        assert_eq!(
+            body["properties"]["Name"]["title"][0]["text"]["content"],
+            "Updated"
+        );
+        assert_eq!(body["properties"]["Date"]["date"]["start"], "2026-03-07");
+        // update_body に parent はない
+        assert!(body.get("parent").is_none());
+    }
+
+    #[test]
+    fn test_build_create_body_uses_custom_props() {
+        let body = build_create_body("db", "Task", "2026-03-06", None, "タスク名", "開催日");
+        assert!(body["properties"]["タスク名"]["title"].is_array());
+        assert!(body["properties"]["開催日"]["date"]["start"].is_string());
     }
 }
