@@ -1,5 +1,6 @@
 use ratatui::style::Color;
 
+pub mod form;
 pub mod sidebar;
 pub mod week_view;
 
