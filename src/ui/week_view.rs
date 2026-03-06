@@ -10,6 +10,19 @@ use ratatui::{
 
 const DAY_NAMES: [&str; 7] = ["月", "火", "水", "木", "金", "土", "日"];
 
+fn build_cursor_cell_text(width: usize, label: Option<&str>) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let base = format!(">{}", label.unwrap_or_default());
+    let len = base.chars().count();
+    if len >= width {
+        base.chars().take(width).collect()
+    } else {
+        format!("{base:<width$}")
+    }
+}
+
 pub fn render_week_view(f: &mut Frame, area: Rect, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -125,16 +138,26 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
     let week_dates = state.week_dates();
 
     // 時間ラベル列: :00のスロットのみ時刻表示、それ以外は空白
+    let cursor_style = Style::default()
+        .bg(Color::Yellow)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
     let time_labels: Vec<Line> = (start_slot..start_slot + visible_slots)
         .map(|s| {
-            if s % 4 == 0 {
+            if s >= cursor_slot_start && s < cursor_slot_end {
+                let label = if s % 4 == 0 {
+                    format!("{:02}:00", (s / 4) % 24)
+                } else {
+                    String::new()
+                };
+                Line::from(Span::styled(
+                    build_cursor_cell_text(cols[0].width as usize, Some(&label)),
+                    cursor_style,
+                ))
+            } else if s % 4 == 0 {
                 let h = s / 4;
                 let style = if h == current_hour {
                     Style::default().fg(Color::Red)
-                } else if s >= cursor_slot_start && s < cursor_slot_end {
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
@@ -157,10 +180,11 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
             .map(|s| {
                 let is_cursor_row =
                     s >= cursor_slot_start && s < cursor_slot_end && *date == state.selected_date;
+                let col_width = cols[col_idx + 1].width as usize;
                 // 現在時刻インジケーター
                 if *date == today && s == current_slot {
                     return Line::from(Span::styled(
-                        "─".repeat(cols[col_idx + 1].width as usize),
+                        "─".repeat(col_width),
                         Style::default().fg(Color::Red),
                     ));
                 }
@@ -226,7 +250,6 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
                             })
                             .unwrap_or_default();
                         let label = format!("{}{}", &ev.title, end_str);
-                        let col_width = cols[col_idx + 1].width as usize;
                         let truncated = if label.len() > col_width {
                             label
                                 .chars()
@@ -236,6 +259,13 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
                         } else {
                             label
                         };
+
+                        if is_cursor_row {
+                            return Line::from(Span::styled(
+                                build_cursor_cell_text(col_width, Some(&truncated)),
+                                cursor_style,
+                            ));
+                        }
 
                         match event_style_str {
                             "text" => Line::from(Span::styled(
@@ -259,12 +289,19 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
                         }
                     } else {
                         // 継続スロット: スタイルに応じたマーカーのみ
+                        if is_cursor_row {
+                            return Line::from(Span::styled(
+                                build_cursor_cell_text(col_width, None),
+                                cursor_style,
+                            ));
+                        }
+
                         match event_style_str {
                             "bar" => {
                                 Line::from(Span::styled("▌", Style::default().fg(event_color)))
                             }
                             "block" => Line::from(Span::styled(
-                                " ".repeat(cols[col_idx + 1].width as usize),
+                                " ".repeat(col_width),
                                 Style::default().bg(event_color),
                             )),
                             _ => Line::from(""), // text: 継続行は空白
@@ -272,8 +309,8 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
                     }
                 } else if is_cursor_row {
                     Line::from(Span::styled(
-                        " ".repeat(cols[col_idx + 1].width as usize),
-                        Style::default().bg(Color::DarkGray),
+                        build_cursor_cell_text(col_width, None),
+                        cursor_style,
                     ))
                 } else {
                     Line::from("")
@@ -282,5 +319,22 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
             .collect();
 
         f.render_widget(Paragraph::new(slot_lines), cols[col_idx + 1]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_cursor_cell_text;
+
+    #[test]
+    fn test_build_cursor_cell_text_has_marker() {
+        let text = build_cursor_cell_text(8, Some("Task"));
+        assert!(text.starts_with(">"));
+    }
+
+    #[test]
+    fn test_build_cursor_cell_text_truncates_to_width() {
+        let text = build_cursor_cell_text(4, Some("ABCDE"));
+        assert_eq!(text.chars().count(), 4);
     }
 }

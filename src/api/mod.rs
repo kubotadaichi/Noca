@@ -4,6 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use models::{NotionEvent, PageObject, QueryResponse};
 use reqwest::Client;
 use serde_json::json;
+use std::collections::HashMap;
 use std::time::Duration;
 
 const NOTION_API_BASE: &str = "https://api.notion.com/v1";
@@ -89,9 +90,18 @@ impl NotionClient {
         date_end: Option<&str>,
         title_prop: &str,
         date_prop: &str,
+        select_defaults: &HashMap<String, String>,
     ) -> Result<String> {
         let url = format!("{}/pages", NOTION_API_BASE);
-        let body = build_create_body(database_id, title, date_start, date_end, title_prop, date_prop);
+        let body = build_create_body(
+            database_id,
+            title,
+            date_start,
+            date_end,
+            title_prop,
+            date_prop,
+            select_defaults,
+        );
         let response = self
             .client
             .post(&url)
@@ -197,22 +207,33 @@ fn build_create_body(
     date_end: Option<&str>,
     title_prop: &str,
     date_prop: &str,
+    select_defaults: &HashMap<String, String>,
 ) -> serde_json::Value {
     let date_value = if let Some(end) = date_end {
         json!({ "start": date_start, "end": end })
     } else {
         json!({ "start": date_start, "end": serde_json::Value::Null })
     };
+
+    let mut properties = serde_json::Map::new();
+    properties.insert(
+        title_prop.to_string(),
+        json!({
+            "title": [{ "text": { "content": title } }]
+        }),
+    );
+    properties.insert(date_prop.to_string(), json!({ "date": date_value }));
+
+    for (prop, value) in select_defaults {
+        if prop == title_prop || prop == date_prop {
+            continue;
+        }
+        properties.insert(prop.clone(), json!({ "select": { "name": value } }));
+    }
+
     json!({
         "parent": { "database_id": database_id },
-        "properties": {
-            title_prop: {
-                "title": [{ "text": { "content": title } }]
-            },
-            date_prop: {
-                "date": date_value
-            }
-        }
+        "properties": properties
     })
 }
 
@@ -347,6 +368,7 @@ fn extract_date_with_key(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn make_page(props: serde_json::Value) -> PageObject {
         PageObject {
@@ -452,7 +474,16 @@ mod tests {
 
     #[test]
     fn test_build_create_body_all_day() {
-        let body = build_create_body("db-id", "Meeting", "2026-03-06", None, "Name", "Date");
+        let select_defaults = HashMap::new();
+        let body = build_create_body(
+            "db-id",
+            "Meeting",
+            "2026-03-06",
+            None,
+            "Name",
+            "Date",
+            &select_defaults,
+        );
         assert_eq!(body["parent"]["database_id"], "db-id");
         assert_eq!(
             body["properties"]["Name"]["title"][0]["text"]["content"],
@@ -464,6 +495,7 @@ mod tests {
 
     #[test]
     fn test_build_create_body_timed() {
+        let select_defaults = HashMap::new();
         let body = build_create_body(
             "db-id",
             "Meeting",
@@ -471,6 +503,7 @@ mod tests {
             Some("2026-03-06T11:00:00+09:00"),
             "Name",
             "Date",
+            &select_defaults,
         );
         assert_eq!(
             body["properties"]["Date"]["date"]["start"],
@@ -496,8 +529,33 @@ mod tests {
 
     #[test]
     fn test_build_create_body_uses_custom_props() {
-        let body = build_create_body("db", "Task", "2026-03-06", None, "タスク名", "開催日");
+        let select_defaults = HashMap::new();
+        let body = build_create_body(
+            "db",
+            "Task",
+            "2026-03-06",
+            None,
+            "タスク名",
+            "開催日",
+            &select_defaults,
+        );
         assert!(body["properties"]["タスク名"]["title"].is_array());
         assert!(body["properties"]["開催日"]["date"]["start"].is_string());
+    }
+
+    #[test]
+    fn test_build_create_body_applies_default_select_properties() {
+        let mut select_defaults = HashMap::new();
+        select_defaults.insert("GTD".to_string(), "🕑Remind".to_string());
+        let body = build_create_body(
+            "db",
+            "Task",
+            "2026-03-06",
+            None,
+            "Name",
+            "Date",
+            &select_defaults,
+        );
+        assert_eq!(body["properties"]["GTD"]["select"]["name"], "🕑Remind");
     }
 }

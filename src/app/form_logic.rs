@@ -1,4 +1,4 @@
-use super::{EventForm, FormField, FormMode};
+use super::{EventForm, FormField};
 
 /// フォームのバリデーション。エラーメッセージを返す（None = OK）
 pub fn validate_form(form: &EventForm) -> Option<String> {
@@ -46,7 +46,6 @@ pub fn form_to_date_strings(form: &EventForm) -> (String, Option<String>) {
     if form.is_all_day {
         (form.date.clone(), None)
     } else {
-        use chrono::FixedOffset;
         let offset = *chrono::Local::now().offset();
         let offset_str = format_offset(offset.local_minus_utc());
         let start = format!("{}T{}:00{}", form.date, form.start_time, offset_str);
@@ -96,16 +95,25 @@ impl EventForm {
         match self.focused_field {
             FormField::Title => self.title.push(c),
             FormField::Date => {
+                if self.date.len() >= 10 {
+                    self.date.clear();
+                }
                 if self.date.len() < 10 {
                     self.date.push(c);
                 }
             }
             FormField::StartTime => {
+                if self.start_time.len() >= 5 {
+                    self.start_time.clear();
+                }
                 if self.start_time.len() < 5 {
                     self.start_time.push(c);
                 }
             }
             FormField::EndTime => {
+                if self.end_time.len() >= 5 {
+                    self.end_time.clear();
+                }
                 if self.end_time.len() < 5 {
                     self.end_time.push(c);
                 }
@@ -256,6 +264,15 @@ mod tests {
         form.input_char('A');
         form.input_char('B');
         assert_eq!(form.title, "AB");
+    }
+
+    #[test]
+    fn test_input_char_on_prefilled_start_time_replaces_from_empty() {
+        let mut form = make_form();
+        form.focused_field = FormField::StartTime;
+        form.start_time = "09:00".to_string();
+        form.input_char('1');
+        assert_eq!(form.start_time, "1");
     }
 
     #[test]

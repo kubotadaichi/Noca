@@ -103,12 +103,12 @@ async fn run_app(
                     app::AppMode::Normal => {
                         match code {
                             KeyCode::Char('q') => break,
-                            KeyCode::Char('h') => {
+                            KeyCode::Char('H') => {
                                 pending_d = false;
                                 state.prev_week();
                                 fetch_events(client, state, databases).await;
                             }
-                            KeyCode::Char('l') => {
+                            KeyCode::Char('L') => {
                                 pending_d = false;
                                 state.next_week();
                                 fetch_events(client, state, databases).await;
@@ -121,7 +121,7 @@ async fn run_app(
                                 pending_d = false;
                                 state.cursor_up();
                             }
-                            KeyCode::Char('H') => {
+                            KeyCode::Char('h') => {
                                 pending_d = false;
                                 let week_before = state.current_week_start;
                                 state.select_prev_day();
@@ -129,7 +129,7 @@ async fn run_app(
                                     fetch_events(client, state, databases).await;
                                 }
                             }
-                            KeyCode::Char('L') => {
+                            KeyCode::Char('l') => {
                                 pending_d = false;
                                 let week_before = state.current_week_start;
                                 state.select_next_day();
@@ -324,6 +324,7 @@ async fn handle_form_submit(
                     date_end.as_deref(),
                     title_prop,
                     date_prop,
+                    &db.create_profile.select,
                 )
                 .await
             {

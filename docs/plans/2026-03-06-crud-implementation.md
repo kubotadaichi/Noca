@@ -1637,6 +1637,8 @@ git commit -m "feat: integrate CRUD keybindings and form submit/delete logic"
 
 | キー | モード | 動作 |
 |------|--------|------|
+| `H` / `L` | Normal | 前週 / 次週 |
+| `h` / `l` | Normal | 前日 / 次日 |
 | `j` / `k` | Normal | 時間カーソル上下移動（自動スクロール） |
 | `n` | Normal | 新規作成フォームを開く（選択日時プリフィル） |
 | `e` | Normal | カーソル位置のイベントを編集フォームで開く |
@@ -1648,3 +1650,10 @@ git commit -m "feat: integrate CRUD keybindings and form submit/delete logic"
 | `Esc` | Form | キャンセル |
 | `y` | Confirm | 削除実行 |
 | その他 | Confirm | キャンセル |
+
+## 追加追補（2026-03-06）
+
+- 通常ヘルプ文言に `n/e/dd` を追加。
+- `create_profile.select` を Config に追加し、作成時のみ Select 既定値を Notion へ送信。
+- カーソル行はイベント上でも見えるよう `>` マーカー + 強調表示へ変更。
+- 新規作成フォームの日付/時刻フィールドは、既定値が埋まっている場合でも最初の入力でクリアして上書き可能に変更。

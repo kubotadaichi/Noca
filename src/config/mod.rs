@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
@@ -24,6 +25,14 @@ pub struct DatabaseConfig {
     pub title_property: Option<String>,
     #[serde(default = "default_event_style")]
     pub event_style: String,
+    #[serde(default)]
+    pub create_profile: CreateProfile,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct CreateProfile {
+    #[serde(default)]
+    pub select: HashMap<String, String>,
 }
 
 fn default_color() -> String {
@@ -122,5 +131,27 @@ name = "Work"
         assert_eq!(db.date_property, None);
         assert_eq!(db.title_property, None);
         assert_eq!(db.event_style, "block");
+        assert!(db.create_profile.select.is_empty());
+    }
+
+    #[test]
+    fn test_create_profile_select_defaults() {
+        let toml_str = r#"
+[auth]
+integration_token = "secret"
+
+[[databases]]
+id = "aaaa"
+name = "Work"
+
+[databases.create_profile.select]
+GTD = "🕑Remind"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let db = &config.databases[0];
+        assert_eq!(
+            db.create_profile.select.get("GTD"),
+            Some(&"🕑Remind".to_string())
+        );
     }
 }

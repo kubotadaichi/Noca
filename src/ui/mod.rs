@@ -5,7 +5,7 @@ pub mod sidebar;
 pub mod week_view;
 
 pub fn help_text() -> &'static str {
-    "[h/l]週移動  [j/k]スクロール  [H/L]日選択  [t]今日  [Tab]切替  [q]終了"
+    "[H/L]週移動  [h/l]日選択  [j/k]カーソル  [n]新規  [e]編集  [dd]削除  [t]今日  [Tab]切替  [q]終了"
 }
 
 pub fn status_bar_text(loading: bool, error: Option<&str>) -> String {
@@ -37,9 +37,12 @@ mod tests {
     #[test]
     fn test_help_text_contains_main_keybindings() {
         let text = help_text();
+        assert!(text.contains("[H/L]"));
         assert!(text.contains("[h/l]"));
         assert!(text.contains("[j/k]"));
-        assert!(text.contains("[H/L]"));
+        assert!(text.contains("[n]"));
+        assert!(text.contains("[e]"));
+        assert!(text.contains("[dd]"));
         assert!(text.contains("[t]"));
         assert!(text.contains("[Tab]"));
         assert!(text.contains("[q]"));
