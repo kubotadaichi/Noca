@@ -3,6 +3,8 @@ use crate::config::DatabaseConfig;
 use chrono::{Datelike, Local, NaiveDate, Timelike};
 use std::collections::{HashMap, HashSet};
 
+pub mod form_logic;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
     Normal,
