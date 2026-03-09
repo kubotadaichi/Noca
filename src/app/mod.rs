@@ -155,6 +155,14 @@ impl AppState {
         }
     }
 
+    pub fn overlap_focus_left(&mut self) {
+        self.overlap_focus = 0;
+    }
+
+    pub fn overlap_focus_right(&mut self) {
+        self.overlap_focus = 1;
+    }
+
     pub fn toggle_panel(&mut self) {
         self.active_panel = match self.active_panel {
             ActivePanel::Sidebar => ActivePanel::Calendar,

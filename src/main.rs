@@ -195,6 +195,14 @@ async fn run_app(
                                     pending_d = true;
                                 }
                             }
+                            KeyCode::Left => {
+                                pending_d = false;
+                                state.overlap_focus_left();
+                            }
+                            KeyCode::Right => {
+                                pending_d = false;
+                                state.overlap_focus_right();
+                            }
                             _ => {
                                 pending_d = false;
                             }
