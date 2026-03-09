@@ -63,6 +63,7 @@ pub struct AppState {
     pub status_message: Option<String>,
     pub scroll_offset: u16, // 時間スロットのスクロール位置（15分単位）
     pub cursor_hour: u32,
+    pub overlap_focus: u8, // 重複イベントのフォーカス列インデックス（0 or 1）
     pub mode: AppMode,
     pub form: Option<EventForm>,
 }
@@ -81,6 +82,7 @@ impl AppState {
             status_message: None,
             scroll_offset: 28, // デフォルト07:00から表示（7 * 4 = 28）
             cursor_hour: 9,
+            overlap_focus: 0,
             mode: AppMode::Normal,
             form: None,
         }
@@ -125,6 +127,7 @@ impl AppState {
     }
 
     pub fn cursor_up(&mut self) {
+        self.overlap_focus = 0;
         if self.cursor_hour > 0 {
             self.cursor_hour -= 1;
         }
@@ -136,6 +139,7 @@ impl AppState {
     }
 
     pub fn cursor_down(&mut self) {
+        self.overlap_focus = 0;
         if self.cursor_hour < 23 {
             self.cursor_hour += 1;
         }
@@ -211,16 +215,38 @@ impl AppState {
         self.mode = AppMode::Normal;
     }
 
+    /// 指定日・指定時刻（hour）に重なる時間付きイベントを全件返す
+    /// 重複判定: event_start < (hour+1)*60 && event_end > hour*60
+    pub fn events_overlapping_hour(&self, date: NaiveDate, hour: u32) -> Vec<&NotionEvent> {
+        let hour_start_min = hour as usize * 60;
+        let hour_end_min = hour_start_min + 60;
+
+        self.events_for_date(&date)
+            .into_iter()
+            .filter(|e| {
+                if e.is_all_day {
+                    return false;
+                }
+                if let Some(dt_start) = e.datetime_start {
+                    let local_start = dt_start.with_timezone(&chrono::Local);
+                    let start_min = local_start.hour() as usize * 60 + local_start.minute() as usize;
+                    let end_min = if let Some(dt_end) = e.datetime_end {
+                        let local_end = dt_end.with_timezone(&chrono::Local);
+                        local_end.hour() as usize * 60 + local_end.minute() as usize
+                    } else {
+                        start_min + 60
+                    };
+                    start_min < hour_end_min && end_min > hour_start_min
+                } else {
+                    false
+                }
+            })
+            .collect()
+    }
+
     pub fn event_at_cursor(&self) -> Option<&crate::api::models::NotionEvent> {
-        let events = self.events_for_date(&self.selected_date);
-        events.into_iter().find(|e| {
-            if let Some(dt) = e.datetime_start {
-                let local = dt.with_timezone(&chrono::Local);
-                local.hour() as u32 == self.cursor_hour
-            } else {
-                false
-            }
-        })
+        let overlapping = self.events_overlapping_hour(self.selected_date, self.cursor_hour);
+        overlapping.into_iter().nth(self.overlap_focus as usize)
     }
 
     pub fn week_dates(&self) -> Vec<NaiveDate> {
@@ -526,5 +552,121 @@ mod tests {
         let mut state = AppState::new(vec![]);
         state.cursor_hour = 10;
         assert!(state.event_at_cursor().is_none());
+    }
+
+    #[test]
+    fn test_events_overlapping_hour_returns_all_overlapping() {
+        use chrono::{Local, TimeZone};
+        let mut state = AppState::new(vec![]);
+        let today = state.selected_date;
+
+        let make_timed_event = |id: &str, start_h: u32, end_h: u32| {
+            let dt_start = Local
+                .from_local_datetime(&today.and_hms_opt(start_h, 0, 0).unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            let dt_end = Local
+                .from_local_datetime(&today.and_hms_opt(end_h, 0, 0).unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            crate::api::models::NotionEvent {
+                id: id.to_string(),
+                title: id.to_string(),
+                date_start: None,
+                datetime_start: Some(dt_start),
+                datetime_end: Some(dt_end),
+                is_all_day: false,
+                database_id: "db".to_string(),
+                color: None,
+            }
+        };
+
+        state.events.insert(
+            today,
+            vec![make_timed_event("a", 10, 11), make_timed_event("b", 10, 11)],
+        );
+
+        let result = state.events_overlapping_hour(today, 10);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_events_overlapping_hour_excludes_non_overlapping() {
+        use chrono::{Local, TimeZone};
+        let mut state = AppState::new(vec![]);
+        let today = state.selected_date;
+
+        let dt_start = Local
+            .from_local_datetime(&today.and_hms_opt(11, 0, 0).unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let dt_end = Local
+            .from_local_datetime(&today.and_hms_opt(12, 0, 0).unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let event = crate::api::models::NotionEvent {
+            id: "a".to_string(),
+            title: "a".to_string(),
+            date_start: None,
+            datetime_start: Some(dt_start),
+            datetime_end: Some(dt_end),
+            is_all_day: false,
+            database_id: "db".to_string(),
+            color: None,
+        };
+        state.events.insert(today, vec![event]);
+
+        let result = state.events_overlapping_hour(today, 10);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_overlap_focus_resets_on_cursor_move() {
+        let mut state = AppState::new(vec![]);
+        state.overlap_focus = 1;
+        state.cursor_down();
+        assert_eq!(state.overlap_focus, 0);
+        state.overlap_focus = 1;
+        state.cursor_up();
+        assert_eq!(state.overlap_focus, 0);
+    }
+
+    #[test]
+    fn test_event_at_cursor_respects_overlap_focus() {
+        use chrono::{Local, TimeZone};
+        let mut state = AppState::new(vec![]);
+        let today = state.selected_date;
+        state.cursor_hour = 10;
+
+        let make_event = |id: &str| {
+            let dt = Local
+                .from_local_datetime(&today.and_hms_opt(10, 0, 0).unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            let dt_end = Local
+                .from_local_datetime(&today.and_hms_opt(11, 0, 0).unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            crate::api::models::NotionEvent {
+                id: id.to_string(),
+                title: id.to_string(),
+                date_start: None,
+                datetime_start: Some(dt),
+                datetime_end: Some(dt_end),
+                is_all_day: false,
+                database_id: "db".to_string(),
+                color: None,
+            }
+        };
+
+        state
+            .events
+            .insert(today, vec![make_event("first"), make_event("second")]);
+
+        state.overlap_focus = 0;
+        assert_eq!(state.event_at_cursor().unwrap().id, "first");
+
+        state.overlap_focus = 1;
+        assert_eq!(state.event_at_cursor().unwrap().id, "second");
     }
 }
