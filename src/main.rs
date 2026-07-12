@@ -59,6 +59,7 @@ async fn run_app(
     databases: &[config::DatabaseConfig],
 ) -> Result<()> {
     let mut pending_d = false; // "dd" の 1 キー目フラグ
+    let mut quitting = false; // q 押下後、未完了のリクエストの完了を待っている間 true
 
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMessage>();
     // 初期ロード
@@ -67,6 +68,10 @@ async fn run_app(
     loop {
         while let Ok(msg) = rx.try_recv() {
             apply_message(state, msg, &tx, client, databases);
+        }
+
+        if quitting && state.pending_requests == 0 {
+            break;
         }
 
         terminal.draw(|f| {
@@ -104,12 +109,25 @@ async fn run_app(
 
         if event::poll(Duration::from_millis(200))? {
             if let Event::Key(KeyEvent { code, .. }) = event::read()? {
+                if quitting {
+                    // シャットダウン待機中は新規入力を無視する（再描画・ドレインは継続）
+                    continue;
+                }
                 // モードを clone して borrow checker を回避
                 let current_mode = state.mode.clone();
                 match current_mode {
                     app::AppMode::Normal => {
                         match code {
-                            KeyCode::Char('q') => break,
+                            KeyCode::Char('q') => {
+                                pending_d = false;
+                                if state.pending_requests > 0 {
+                                    quitting = true;
+                                    state.status_message =
+                                        Some("通信の完了を待っています...".to_string());
+                                } else {
+                                    break;
+                                }
+                            }
                             KeyCode::Char('H') => {
                                 pending_d = false;
                                 state.prev_week();
