@@ -253,13 +253,13 @@ fn render_status_bar(f: &mut ratatui::Frame, area: Rect, state: &AppState) {
         // Confirm モードはステータスバーに確認メッセージを表示（status_message に格納済み）
         error.unwrap_or("").to_string()
     } else {
-        ui::status_bar_text(state.loading, error)
+        ui::status_bar_text(state.pending_requests > 0, error)
     };
     let style = if error.is_some() && !matches!(state.mode, app::AppMode::Confirm(_)) {
         Style::default().fg(Color::Red)
     } else if matches!(state.mode, app::AppMode::Confirm(_)) {
         Style::default().fg(Color::Yellow)
-    } else if state.loading {
+    } else if state.pending_requests > 0 {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default().fg(Color::DarkGray)
@@ -407,7 +407,7 @@ async fn fetch_events(
         .format("%Y-%m-%d")
         .to_string();
 
-    state.loading = true;
+    state.pending_requests += 1;
     let mut fetched_events: HashMap<chrono::NaiveDate, Vec<api::models::NotionEvent>> =
         HashMap::new();
     let mut had_success = false;
@@ -446,5 +446,5 @@ async fn fetch_events(
         state.status_message = None;
     }
 
-    state.loading = false;
+    state.pending_requests = state.pending_requests.saturating_sub(1);
 }

@@ -12,6 +12,27 @@ pub enum AppMode {
     Confirm(ConfirmAction),
 }
 
+#[derive(Debug, Clone)]
+pub struct FetchRequest {
+    pub generation: u64,
+    pub start: String, // "YYYY-MM-DD"
+    pub end: String,   // "YYYY-MM-DD"
+    pub range: (NaiveDate, NaiveDate),
+}
+
+#[derive(Debug)]
+pub enum AppMessage {
+    FetchResult {
+        generation: u64,
+        range: (NaiveDate, NaiveDate),
+        events: HashMap<NaiveDate, Vec<NotionEvent>>,
+        error: Option<String>,
+    },
+    MutationResult {
+        error: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfirmAction {
     DeleteEvent(String), // page_id
@@ -59,7 +80,8 @@ pub struct AppState {
     pub events: HashMap<NaiveDate, Vec<NotionEvent>>,
     pub databases: Vec<DatabaseConfig>,
     pub active_panel: ActivePanel,
-    pub loading: bool,
+    pub pending_requests: usize,
+    pub fetch_generation: u64,
     pub status_message: Option<String>,
     pub scroll_offset: u16, // 時間スロットのスクロール位置（15分単位）
     pub cursor_hour: u32,
@@ -80,7 +102,8 @@ impl AppState {
             events: HashMap::new(),
             databases,
             active_panel: ActivePanel::Calendar,
-            loading: false,
+            pending_requests: 0,
+            fetch_generation: 0,
             status_message: None,
             scroll_offset: 28, // デフォルト07:00から表示（7 * 4 = 28）
             cursor_hour: 9,
@@ -278,6 +301,54 @@ impl AppState {
                         > fe - chrono::Duration::days(MARGIN)
             }
             _ => true,
+        }
+    }
+
+    /// fetch リクエストを生成。世代番号を進め、pending をインクリメントする。
+    pub fn plan_fetch(&mut self) -> FetchRequest {
+        self.fetch_generation += 1;
+        self.pending_requests += 1;
+        let start = self.view_start - chrono::Duration::weeks(1);
+        let end = self.view_start + chrono::Duration::weeks(2);
+        FetchRequest {
+            generation: self.fetch_generation,
+            start: start.format("%Y-%m-%d").to_string(),
+            end: end.format("%Y-%m-%d").to_string(),
+            range: (start, end),
+        }
+    }
+
+    /// fetch 結果を適用。最新世代のみ反映し、古い世代は破棄する。
+    pub fn apply_fetch_result(
+        &mut self,
+        generation: u64,
+        range: (NaiveDate, NaiveDate),
+        events: HashMap<NaiveDate, Vec<NotionEvent>>,
+        error: Option<String>,
+    ) {
+        self.pending_requests = self.pending_requests.saturating_sub(1);
+        if generation != self.fetch_generation {
+            return; // stale: 破棄
+        }
+        match error {
+            Some(e) => self.status_message = Some(e),
+            None => {
+                self.replace_events(events);
+                self.fetched_start = Some(range.0);
+                self.fetched_end = Some(range.1);
+                self.status_message = None;
+            }
+        }
+    }
+
+    pub fn begin_mutation(&mut self) {
+        self.pending_requests += 1;
+    }
+
+    pub fn finish_mutation(&mut self, error: Option<String>) {
+        self.pending_requests = self.pending_requests.saturating_sub(1);
+        if let Some(e) = error {
+            self.status_message = Some(e);
         }
     }
 
@@ -738,5 +809,80 @@ mod tests {
         // 表示右端 view_start+6、取得右端はその 2 日先のみ（マージン 3 日未満）
         state.fetched_end = Some(state.view_start + chrono::Duration::days(8));
         assert!(state.needs_fetch());
+    }
+
+    #[test]
+    fn test_plan_fetch_increments_generation_and_pending() {
+        let mut state = AppState::new(vec![]);
+        assert_eq!(state.fetch_generation, 0);
+        assert_eq!(state.pending_requests, 0);
+
+        let req = state.plan_fetch();
+
+        assert_eq!(req.generation, 1);
+        assert_eq!(state.fetch_generation, 1);
+        assert_eq!(state.pending_requests, 1);
+        // 範囲は view_start の 1 週間前 〜 2 週間後
+        assert_eq!(req.range.0, state.view_start - chrono::Duration::weeks(1));
+        assert_eq!(req.range.1, state.view_start + chrono::Duration::weeks(2));
+    }
+
+    #[test]
+    fn test_apply_fetch_result_latest_generation_applies() {
+        let mut state = AppState::new(vec![]);
+        let req = state.plan_fetch();
+        let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+        let mut events = HashMap::new();
+        events.insert(day, vec![make_event("e1", "Event 1", day)]);
+
+        state.apply_fetch_result(req.generation, req.range, events, None);
+
+        assert_eq!(state.pending_requests, 0);
+        assert!(state.events.contains_key(&day));
+        assert_eq!(state.fetched_start, Some(req.range.0));
+        assert_eq!(state.fetched_end, Some(req.range.1));
+    }
+
+    #[test]
+    fn test_apply_fetch_result_stale_generation_dropped() {
+        let mut state = AppState::new(vec![]);
+        let stale = state.plan_fetch(); // generation 1
+        let _newer = state.plan_fetch(); // generation 2（最新）
+        let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+        let mut events = HashMap::new();
+        events.insert(day, vec![make_event("stale", "old", day)]);
+
+        state.apply_fetch_result(stale.generation, stale.range, events, None);
+
+        // 古い世代なのでイベントは反映されない
+        assert!(!state.events.contains_key(&day));
+        // ただし pending は減る（2 → 1）
+        assert_eq!(state.pending_requests, 1);
+    }
+
+    #[test]
+    fn test_apply_fetch_result_error_sets_status() {
+        let mut state = AppState::new(vec![]);
+        let req = state.plan_fetch();
+
+        state.apply_fetch_result(req.generation, req.range, HashMap::new(), Some("API Error: boom".to_string()));
+
+        assert_eq!(state.pending_requests, 0);
+        assert_eq!(state.status_message.as_deref(), Some("API Error: boom"));
+    }
+
+    #[test]
+    fn test_mutation_counter() {
+        let mut state = AppState::new(vec![]);
+        state.begin_mutation();
+        assert_eq!(state.pending_requests, 1);
+        state.finish_mutation(None);
+        assert_eq!(state.pending_requests, 0);
+        assert!(state.status_message.is_none());
+
+        state.begin_mutation();
+        state.finish_mutation(Some("✗ boom".to_string()));
+        assert_eq!(state.pending_requests, 0);
+        assert_eq!(state.status_message.as_deref(), Some("✗ boom"));
     }
 }
