@@ -123,17 +123,17 @@ async fn run_app(
                             }
                             KeyCode::Char('h') => {
                                 pending_d = false;
-                                let week_before = state.current_week_start;
+                                let week_before = state.view_start;
                                 state.select_prev_day();
-                                if state.current_week_start != week_before {
+                                if state.view_start != week_before {
                                     fetch_events(client, state, databases).await;
                                 }
                             }
                             KeyCode::Char('l') => {
                                 pending_d = false;
-                                let week_before = state.current_week_start;
+                                let week_before = state.view_start;
                                 state.select_next_day();
-                                if state.current_week_start != week_before {
+                                if state.view_start != week_before {
                                     fetch_events(client, state, databases).await;
                                 }
                             }
@@ -401,7 +401,7 @@ async fn fetch_events(
     state: &mut AppState,
     databases: &[config::DatabaseConfig],
 ) {
-    let week_start = state.current_week_start;
+    let week_start = state.view_start;
     let start_str = week_start.format("%Y-%m-%d").to_string();
     let end_str = (week_start + chrono::Duration::weeks(3))
         .format("%Y-%m-%d")
