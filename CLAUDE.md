@@ -78,10 +78,10 @@ GTD = "🕑Remind"
 
 | キー | 動作 |
 |------|------|
-| `h` / `l` | 前週 / 次週移動 |
-| `H` / `L` | 前日 / 次日選択（週跨ぎ対応） |
+| `h` / `l` | 前日 / 次日選択（表示ウィンドウが1日ずつ追従） |
+| `H` / `L` | 前週 / 次週移動（view_start を7日スライド） |
 | `j` / `k` | カーソル移動（時間スロット）+ スクロール自動追従 |
-| `t` | 今日に戻る |
+| `t` | 今日へ（view_start を今日の週月曜へスナップ） |
 | `Tab` | サイドバー / カレンダー切替 |
 | `n` | 新規イベント作成フォームを開く（選択日・カーソル時刻プリセット） |
 | `e` | カーソル位置のイベントを編集フォームで開く |
@@ -112,10 +112,10 @@ GTD = "🕑Remind"
 - `cursor_hour`: u32, 0-23。`j`/`k` で移動しスクロールを自動追従
 - `mode`: AppMode::Normal / Form / Confirm(ConfirmAction)
 - `form`: Option<EventForm>。フォームが開いているときのみ Some
+- `view_start`: NaiveDate, 表示ウィンドウの左端（7日間の起点）。`h`/`l` で1日ずつローリング追従。`H`/`L` で7日スライド。`t` で今日の週月曜へスナップ
 - `replace_events()`: ID重複排除してイベントを差し替え（古いデータは消える）
-- `select_next/prev_day()`: 週境界を超えたら `current_week_start` も自動更新
 - `event_at_cursor()`: 選択日の `cursor_hour` と一致する datetime_start を持つイベントを返す
-- 週はMonday始まり
+- **背景通信**: すべての Notion API 呼び出し（fetch/create/update/delete）は非同期・ノンブロッキング。`tokio::sync::mpsc` チャネル + `tokio::spawn` で実行。UI は毎フレーム `try_recv()` で結果をドレイン。`pending_requests: usize` でローディング状態を管理（`> 0` なら表示）。`fetch_generation: u64` で stale 結果破棄。`fetched_start`/`fetched_end` と `needs_fetch()` でプリフェッチ判定（`view_start ± 1week` で範囲管理）
 
 ### form_logic (`src/app/form_logic.rs`)
 - `validate_form()`: タイトル必須・日付形式・開始<終了時刻チェック
