@@ -66,6 +66,8 @@ pub struct AppState {
     pub overlap_focus: u8, // 重複イベントのフォーカス列インデックス（0 or 1）
     pub mode: AppMode,
     pub form: Option<EventForm>,
+    pub fetched_start: Option<NaiveDate>,
+    pub fetched_end: Option<NaiveDate>,
 }
 
 impl AppState {
@@ -85,6 +87,8 @@ impl AppState {
             overlap_focus: 0,
             mode: AppMode::Normal,
             form: None,
+            fetched_start: None,
+            fetched_end: None,
         }
     }
 
@@ -261,6 +265,20 @@ impl AppState {
         (0..7)
             .map(|i| self.view_start + chrono::Duration::days(i))
             .collect()
+    }
+
+    /// 表示ウィンドウが取得済み範囲の端マージン内に近づいた、
+    /// または未取得なら再取得が必要
+    pub fn needs_fetch(&self) -> bool {
+        const MARGIN: i64 = 3;
+        match (self.fetched_start, self.fetched_end) {
+            (Some(fs), Some(fe)) => {
+                self.view_start < fs + chrono::Duration::days(MARGIN)
+                    || self.view_start + chrono::Duration::days(6)
+                        > fe - chrono::Duration::days(MARGIN)
+            }
+            _ => true,
+        }
     }
 
     pub fn events_for_date(&self, date: &NaiveDate) -> Vec<&NotionEvent> {
@@ -687,5 +705,38 @@ mod tests {
 
         state.overlap_focus = 1;
         assert_eq!(state.event_at_cursor().unwrap().id, "second");
+    }
+
+    #[test]
+    fn test_needs_fetch_true_when_never_fetched() {
+        let state = AppState::new(vec![]);
+        assert!(state.needs_fetch());
+    }
+
+    #[test]
+    fn test_needs_fetch_false_within_range() {
+        let mut state = AppState::new(vec![]);
+        // ウィンドウ左端の 1 週間前 〜 2 週間後を取得済みにする
+        state.fetched_start = Some(state.view_start - chrono::Duration::weeks(1));
+        state.fetched_end = Some(state.view_start + chrono::Duration::weeks(2));
+        assert!(!state.needs_fetch());
+    }
+
+    #[test]
+    fn test_needs_fetch_true_near_left_edge() {
+        let mut state = AppState::new(vec![]);
+        state.fetched_start = Some(state.view_start - chrono::Duration::days(2));
+        state.fetched_end = Some(state.view_start + chrono::Duration::weeks(2));
+        // 左端まで残り 2 日（マージン 3 日未満）→ 再取得が必要
+        assert!(state.needs_fetch());
+    }
+
+    #[test]
+    fn test_needs_fetch_true_near_right_edge() {
+        let mut state = AppState::new(vec![]);
+        state.fetched_start = Some(state.view_start - chrono::Duration::weeks(1));
+        // 表示右端 view_start+6、取得右端はその 2 日先のみ（マージン 3 日未満）
+        state.fetched_end = Some(state.view_start + chrono::Duration::days(8));
+        assert!(state.needs_fetch());
     }
 }
