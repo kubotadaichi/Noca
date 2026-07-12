@@ -117,10 +117,12 @@ impl AppState {
 
     pub fn next_week(&mut self) {
         self.view_start += chrono::Duration::weeks(1);
+        self.selected_date += chrono::Duration::weeks(1);
     }
 
     pub fn prev_week(&mut self) {
         self.view_start -= chrono::Duration::weeks(1);
+        self.selected_date -= chrono::Duration::weeks(1);
     }
 
     pub fn select_next_day(&mut self) {
@@ -421,6 +423,31 @@ mod tests {
         assert_eq!(state.view_start, initial + chrono::Duration::weeks(1));
         state.prev_week();
         assert_eq!(state.view_start, initial);
+    }
+
+    #[test]
+    fn test_next_week_shifts_selected_date_by_7() {
+        let mut state = AppState::new(vec![]);
+        let initial_selected = state.selected_date;
+        let initial_view = state.view_start;
+        state.next_week();
+        assert_eq!(state.selected_date, initial_selected + chrono::Duration::days(7));
+        assert_eq!(state.view_start, initial_view + chrono::Duration::days(7));
+        // cursor stays within the visible window
+        assert!(state.selected_date >= state.view_start);
+        assert!(state.selected_date <= state.view_start + chrono::Duration::days(6));
+    }
+
+    #[test]
+    fn test_prev_week_shifts_selected_date_by_7() {
+        let mut state = AppState::new(vec![]);
+        let initial_selected = state.selected_date;
+        let initial_view = state.view_start;
+        state.prev_week();
+        assert_eq!(state.selected_date, initial_selected - chrono::Duration::days(7));
+        assert_eq!(state.view_start, initial_view - chrono::Duration::days(7));
+        assert!(state.selected_date >= state.view_start);
+        assert!(state.selected_date <= state.view_start + chrono::Duration::days(6));
     }
 
     #[test]

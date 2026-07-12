@@ -137,7 +137,7 @@ GTD = "🕑Remind"
 
 ## テスト
 
-ユニットテストは各モジュールの `#[cfg(test)]` に記述 (合計68テスト):
+ユニットテストは各モジュールの `#[cfg(test)]` に記述 (合計84テスト):
 - `src/app/mod.rs`: AppState のロジックテスト（週移動, スクロール, 重複排除, CRUD状態, cursor_hour など）
 - `src/app/form_logic.rs`: バリデーション, フィールド操作, 日付文字列変換
 - `src/api/mod.rs`: parse_event, build_query/create/update_body, is_missing_property_error

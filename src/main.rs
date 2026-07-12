@@ -67,7 +67,7 @@ async fn run_app(
 
     loop {
         while let Ok(msg) = rx.try_recv() {
-            apply_message(state, msg, &tx, client, databases);
+            apply_message(state, msg, &tx, client, databases, quitting);
         }
 
         if quitting && state.pending_requests == 0 {
@@ -484,6 +484,7 @@ fn apply_message(
     tx: &mpsc::UnboundedSender<AppMessage>,
     client: &api::NotionClient,
     databases: &[config::DatabaseConfig],
+    quitting: bool,
 ) {
     match msg {
         AppMessage::FetchResult {
@@ -496,8 +497,8 @@ fn apply_message(
         }
         AppMessage::MutationResult { error } => {
             state.finish_mutation(error.clone());
-            if error.is_none() {
-                // 変更が反映された最新データを取得
+            if error.is_none() && !quitting {
+                // 変更が反映された最新データを取得（終了処理中は再取得しない）
                 spawn_fetch(state, tx, client, databases);
             }
         }
