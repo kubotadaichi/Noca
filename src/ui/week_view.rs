@@ -10,6 +10,12 @@ use ratatui::{
 
 const DAY_NAMES: [&str; 7] = ["月", "火", "水", "木", "金", "土", "日"];
 
+/// 日付自身の曜日から日本語の曜日名を返す（月=0..日=6）
+/// 表示ウィンドウが月曜始まりでなくても正しい曜日になる
+fn weekday_ja(date: chrono::NaiveDate) -> &'static str {
+    DAY_NAMES[date.weekday().num_days_from_monday() as usize]
+}
+
 fn build_cursor_cell_text(width: usize, label: Option<&str>) -> String {
     if width == 0 {
         return String::new();
@@ -174,7 +180,7 @@ fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
     for (i, date) in week_dates.iter().enumerate() {
         let is_today = *date == today;
         let is_selected = *date == state.selected_date;
-        let label = format!("{} {}", DAY_NAMES[i], date.day());
+        let label = format!("{} {}", weekday_ja(*date), date.day());
         let style = if is_today {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
         } else if is_selected {
@@ -392,7 +398,8 @@ fn render_time_slots(f: &mut Frame, area: Rect, state: &AppState) {
 
 #[cfg(test)]
 mod tests {
-    use super::build_cursor_cell_text;
+    use super::{build_cursor_cell_text, weekday_ja};
+    use chrono::NaiveDate;
 
     #[test]
     fn test_build_cursor_cell_text_has_marker() {
@@ -404,5 +411,26 @@ mod tests {
     fn test_build_cursor_cell_text_truncates_to_width() {
         let text = build_cursor_cell_text(4, Some("ABCDE"));
         assert_eq!(text.chars().count(), 4);
+    }
+
+    #[test]
+    fn test_weekday_ja_monday() {
+        // 2026-03-02 は月曜
+        let monday = NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        assert_eq!(weekday_ja(monday), "月");
+    }
+
+    #[test]
+    fn test_weekday_ja_thursday() {
+        // 2026-03-05 は木曜
+        let thursday = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+        assert_eq!(weekday_ja(thursday), "木");
+    }
+
+    #[test]
+    fn test_weekday_ja_sunday() {
+        // 2026-03-08 は日曜
+        let sunday = NaiveDate::from_ymd_opt(2026, 3, 8).unwrap();
+        assert_eq!(weekday_ja(sunday), "日");
     }
 }
