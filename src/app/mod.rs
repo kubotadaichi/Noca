@@ -12,6 +12,27 @@ pub enum AppMode {
     Confirm(ConfirmAction),
 }
 
+#[derive(Debug, Clone)]
+pub struct FetchRequest {
+    pub generation: u64,
+    pub start: String, // "YYYY-MM-DD"
+    pub end: String,   // "YYYY-MM-DD"
+    pub range: (NaiveDate, NaiveDate),
+}
+
+#[derive(Debug)]
+pub enum AppMessage {
+    FetchResult {
+        generation: u64,
+        range: (NaiveDate, NaiveDate),
+        events: HashMap<NaiveDate, Vec<NotionEvent>>,
+        error: Option<String>,
+    },
+    MutationResult {
+        error: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfirmAction {
     DeleteEvent(String), // page_id
@@ -54,18 +75,21 @@ pub enum ActivePanel {
 
 #[derive(Debug)]
 pub struct AppState {
-    pub current_week_start: NaiveDate,
+    pub view_start: NaiveDate,
     pub selected_date: NaiveDate,
     pub events: HashMap<NaiveDate, Vec<NotionEvent>>,
     pub databases: Vec<DatabaseConfig>,
     pub active_panel: ActivePanel,
-    pub loading: bool,
+    pub pending_requests: usize,
+    pub fetch_generation: u64,
     pub status_message: Option<String>,
     pub scroll_offset: u16, // 時間スロットのスクロール位置（15分単位）
     pub cursor_hour: u32,
     pub overlap_focus: u8, // 重複イベントのフォーカス列インデックス（0 or 1）
     pub mode: AppMode,
     pub form: Option<EventForm>,
+    pub fetched_start: Option<NaiveDate>,
+    pub fetched_end: Option<NaiveDate>,
 }
 
 impl AppState {
@@ -73,47 +97,52 @@ impl AppState {
         let today = Local::now().date_naive();
         let week_start = week_start_of(today);
         Self {
-            current_week_start: week_start,
+            view_start: week_start,
             selected_date: today,
             events: HashMap::new(),
             databases,
             active_panel: ActivePanel::Calendar,
-            loading: false,
+            pending_requests: 0,
+            fetch_generation: 0,
             status_message: None,
             scroll_offset: 28, // デフォルト07:00から表示（7 * 4 = 28）
             cursor_hour: 9,
             overlap_focus: 0,
             mode: AppMode::Normal,
             form: None,
+            fetched_start: None,
+            fetched_end: None,
         }
     }
 
     pub fn next_week(&mut self) {
-        self.current_week_start += chrono::Duration::weeks(1);
+        self.view_start += chrono::Duration::weeks(1);
+        self.selected_date += chrono::Duration::weeks(1);
     }
 
     pub fn prev_week(&mut self) {
-        self.current_week_start -= chrono::Duration::weeks(1);
+        self.view_start -= chrono::Duration::weeks(1);
+        self.selected_date -= chrono::Duration::weeks(1);
     }
 
     pub fn select_next_day(&mut self) {
         self.selected_date += chrono::Duration::days(1);
-        if self.selected_date >= self.current_week_start + chrono::Duration::weeks(1) {
-            self.current_week_start += chrono::Duration::weeks(1);
+        if self.selected_date > self.view_start + chrono::Duration::days(6) {
+            self.view_start += chrono::Duration::days(1);
         }
     }
 
     pub fn select_prev_day(&mut self) {
         self.selected_date -= chrono::Duration::days(1);
-        if self.selected_date < self.current_week_start {
-            self.current_week_start -= chrono::Duration::weeks(1);
+        if self.selected_date < self.view_start {
+            self.view_start -= chrono::Duration::days(1);
         }
     }
 
     pub fn go_to_today(&mut self) {
         let today = Local::now().date_naive();
         self.selected_date = today;
-        self.current_week_start = week_start_of(today);
+        self.view_start = week_start_of(today);
     }
 
     pub fn scroll_up(&mut self) {
@@ -259,8 +288,70 @@ impl AppState {
 
     pub fn week_dates(&self) -> Vec<NaiveDate> {
         (0..7)
-            .map(|i| self.current_week_start + chrono::Duration::days(i))
+            .map(|i| self.view_start + chrono::Duration::days(i))
             .collect()
+    }
+
+    /// 表示ウィンドウが取得済み範囲の端マージン内に近づいた、
+    /// または未取得なら再取得が必要
+    pub fn needs_fetch(&self) -> bool {
+        const MARGIN: i64 = 3;
+        match (self.fetched_start, self.fetched_end) {
+            (Some(fs), Some(fe)) => {
+                self.view_start < fs + chrono::Duration::days(MARGIN)
+                    || self.view_start + chrono::Duration::days(6)
+                        > fe - chrono::Duration::days(MARGIN)
+            }
+            _ => true,
+        }
+    }
+
+    /// fetch リクエストを生成。世代番号を進め、pending をインクリメントする。
+    pub fn plan_fetch(&mut self) -> FetchRequest {
+        self.fetch_generation += 1;
+        self.pending_requests += 1;
+        let start = self.view_start - chrono::Duration::weeks(1);
+        let end = self.view_start + chrono::Duration::weeks(2);
+        FetchRequest {
+            generation: self.fetch_generation,
+            start: start.format("%Y-%m-%d").to_string(),
+            end: end.format("%Y-%m-%d").to_string(),
+            range: (start, end),
+        }
+    }
+
+    /// fetch 結果を適用。最新世代のみ反映し、古い世代は破棄する。
+    pub fn apply_fetch_result(
+        &mut self,
+        generation: u64,
+        range: (NaiveDate, NaiveDate),
+        events: HashMap<NaiveDate, Vec<NotionEvent>>,
+        error: Option<String>,
+    ) {
+        self.pending_requests = self.pending_requests.saturating_sub(1);
+        if generation != self.fetch_generation {
+            return; // stale: 破棄
+        }
+        match error {
+            Some(e) => self.status_message = Some(e),
+            None => {
+                self.replace_events(events);
+                self.fetched_start = Some(range.0);
+                self.fetched_end = Some(range.1);
+                self.status_message = None;
+            }
+        }
+    }
+
+    pub fn begin_mutation(&mut self) {
+        self.pending_requests += 1;
+    }
+
+    pub fn finish_mutation(&mut self, error: Option<String>) {
+        self.pending_requests = self.pending_requests.saturating_sub(1);
+        if let Some(e) = error {
+            self.status_message = Some(e);
+        }
     }
 
     pub fn events_for_date(&self, date: &NaiveDate) -> Vec<&NotionEvent> {
@@ -327,11 +418,36 @@ mod tests {
     #[test]
     fn test_next_prev_week() {
         let mut state = AppState::new(vec![]);
-        let initial = state.current_week_start;
+        let initial = state.view_start;
         state.next_week();
-        assert_eq!(state.current_week_start, initial + chrono::Duration::weeks(1));
+        assert_eq!(state.view_start, initial + chrono::Duration::weeks(1));
         state.prev_week();
-        assert_eq!(state.current_week_start, initial);
+        assert_eq!(state.view_start, initial);
+    }
+
+    #[test]
+    fn test_next_week_shifts_selected_date_by_7() {
+        let mut state = AppState::new(vec![]);
+        let initial_selected = state.selected_date;
+        let initial_view = state.view_start;
+        state.next_week();
+        assert_eq!(state.selected_date, initial_selected + chrono::Duration::days(7));
+        assert_eq!(state.view_start, initial_view + chrono::Duration::days(7));
+        // cursor stays within the visible window
+        assert!(state.selected_date >= state.view_start);
+        assert!(state.selected_date <= state.view_start + chrono::Duration::days(6));
+    }
+
+    #[test]
+    fn test_prev_week_shifts_selected_date_by_7() {
+        let mut state = AppState::new(vec![]);
+        let initial_selected = state.selected_date;
+        let initial_view = state.view_start;
+        state.prev_week();
+        assert_eq!(state.selected_date, initial_selected - chrono::Duration::days(7));
+        assert_eq!(state.view_start, initial_view - chrono::Duration::days(7));
+        assert!(state.selected_date >= state.view_start);
+        assert!(state.selected_date <= state.view_start + chrono::Duration::days(6));
     }
 
     #[test]
@@ -418,43 +534,54 @@ mod tests {
     }
 
     #[test]
-    fn test_select_next_day_follows_week() {
+    fn test_select_next_day_rolls_window_by_one_day() {
         let mut state = AppState::new(vec![]);
-        let week_end = state.current_week_start + chrono::Duration::days(6);
-        state.selected_date = week_end;
-        let initial_week = state.current_week_start;
+        // 選択日をウィンドウ右端に置く
+        state.selected_date = state.view_start + chrono::Duration::days(6);
+        let initial_view = state.view_start;
 
         state.select_next_day();
 
-        assert_eq!(
-            state.current_week_start,
-            initial_week + chrono::Duration::weeks(1)
-        );
+        // ウィンドウは7日ではなく1日だけ進む
+        assert_eq!(state.view_start, initial_view + chrono::Duration::days(1));
+        assert_eq!(state.selected_date, initial_view + chrono::Duration::days(7));
     }
 
     #[test]
-    fn test_select_prev_day_follows_week() {
+    fn test_select_prev_day_rolls_window_by_one_day() {
         let mut state = AppState::new(vec![]);
-        state.selected_date = state.current_week_start;
-        let initial_week = state.current_week_start;
+        // 選択日をウィンドウ左端に置く
+        state.selected_date = state.view_start;
+        let initial_view = state.view_start;
 
         state.select_prev_day();
 
-        assert_eq!(
-            state.current_week_start,
-            initial_week - chrono::Duration::weeks(1)
-        );
+        assert_eq!(state.view_start, initial_view - chrono::Duration::days(1));
+        assert_eq!(state.selected_date, initial_view - chrono::Duration::days(1));
     }
 
     #[test]
-    fn test_select_next_day_within_week_does_not_change_week() {
+    fn test_select_next_day_within_window_does_not_move_view() {
         let mut state = AppState::new(vec![]);
-        state.selected_date = state.current_week_start + chrono::Duration::days(2);
-        let initial_week = state.current_week_start;
+        state.selected_date = state.view_start + chrono::Duration::days(2);
+        let initial_view = state.view_start;
 
         state.select_next_day();
 
-        assert_eq!(state.current_week_start, initial_week);
+        assert_eq!(state.view_start, initial_view);
+    }
+
+    #[test]
+    fn test_go_to_today_snaps_view_to_monday_week() {
+        let mut state = AppState::new(vec![]);
+        state.selected_date = chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        state.view_start = chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+
+        state.go_to_today();
+
+        let today = chrono::Local::now().date_naive();
+        assert_eq!(state.selected_date, today);
+        assert_eq!(state.view_start, week_start_of(today));
     }
 
     #[test]
@@ -676,5 +803,113 @@ mod tests {
 
         state.overlap_focus = 1;
         assert_eq!(state.event_at_cursor().unwrap().id, "second");
+    }
+
+    #[test]
+    fn test_needs_fetch_true_when_never_fetched() {
+        let state = AppState::new(vec![]);
+        assert!(state.needs_fetch());
+    }
+
+    #[test]
+    fn test_needs_fetch_false_within_range() {
+        let mut state = AppState::new(vec![]);
+        // ウィンドウ左端の 1 週間前 〜 2 週間後を取得済みにする
+        state.fetched_start = Some(state.view_start - chrono::Duration::weeks(1));
+        state.fetched_end = Some(state.view_start + chrono::Duration::weeks(2));
+        assert!(!state.needs_fetch());
+    }
+
+    #[test]
+    fn test_needs_fetch_true_near_left_edge() {
+        let mut state = AppState::new(vec![]);
+        state.fetched_start = Some(state.view_start - chrono::Duration::days(2));
+        state.fetched_end = Some(state.view_start + chrono::Duration::weeks(2));
+        // 左端まで残り 2 日（マージン 3 日未満）→ 再取得が必要
+        assert!(state.needs_fetch());
+    }
+
+    #[test]
+    fn test_needs_fetch_true_near_right_edge() {
+        let mut state = AppState::new(vec![]);
+        state.fetched_start = Some(state.view_start - chrono::Duration::weeks(1));
+        // 表示右端 view_start+6、取得右端はその 2 日先のみ（マージン 3 日未満）
+        state.fetched_end = Some(state.view_start + chrono::Duration::days(8));
+        assert!(state.needs_fetch());
+    }
+
+    #[test]
+    fn test_plan_fetch_increments_generation_and_pending() {
+        let mut state = AppState::new(vec![]);
+        assert_eq!(state.fetch_generation, 0);
+        assert_eq!(state.pending_requests, 0);
+
+        let req = state.plan_fetch();
+
+        assert_eq!(req.generation, 1);
+        assert_eq!(state.fetch_generation, 1);
+        assert_eq!(state.pending_requests, 1);
+        // 範囲は view_start の 1 週間前 〜 2 週間後
+        assert_eq!(req.range.0, state.view_start - chrono::Duration::weeks(1));
+        assert_eq!(req.range.1, state.view_start + chrono::Duration::weeks(2));
+    }
+
+    #[test]
+    fn test_apply_fetch_result_latest_generation_applies() {
+        let mut state = AppState::new(vec![]);
+        let req = state.plan_fetch();
+        let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+        let mut events = HashMap::new();
+        events.insert(day, vec![make_event("e1", "Event 1", day)]);
+
+        state.apply_fetch_result(req.generation, req.range, events, None);
+
+        assert_eq!(state.pending_requests, 0);
+        assert!(state.events.contains_key(&day));
+        assert_eq!(state.fetched_start, Some(req.range.0));
+        assert_eq!(state.fetched_end, Some(req.range.1));
+    }
+
+    #[test]
+    fn test_apply_fetch_result_stale_generation_dropped() {
+        let mut state = AppState::new(vec![]);
+        let stale = state.plan_fetch(); // generation 1
+        let _newer = state.plan_fetch(); // generation 2（最新）
+        let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+        let mut events = HashMap::new();
+        events.insert(day, vec![make_event("stale", "old", day)]);
+
+        state.apply_fetch_result(stale.generation, stale.range, events, None);
+
+        // 古い世代なのでイベントは反映されない
+        assert!(!state.events.contains_key(&day));
+        // ただし pending は減る（2 → 1）
+        assert_eq!(state.pending_requests, 1);
+    }
+
+    #[test]
+    fn test_apply_fetch_result_error_sets_status() {
+        let mut state = AppState::new(vec![]);
+        let req = state.plan_fetch();
+
+        state.apply_fetch_result(req.generation, req.range, HashMap::new(), Some("API Error: boom".to_string()));
+
+        assert_eq!(state.pending_requests, 0);
+        assert_eq!(state.status_message.as_deref(), Some("API Error: boom"));
+    }
+
+    #[test]
+    fn test_mutation_counter() {
+        let mut state = AppState::new(vec![]);
+        state.begin_mutation();
+        assert_eq!(state.pending_requests, 1);
+        state.finish_mutation(None);
+        assert_eq!(state.pending_requests, 0);
+        assert!(state.status_message.is_none());
+
+        state.begin_mutation();
+        state.finish_mutation(Some("✗ boom".to_string()));
+        assert_eq!(state.pending_requests, 0);
+        assert_eq!(state.status_message.as_deref(), Some("✗ boom"));
     }
 }

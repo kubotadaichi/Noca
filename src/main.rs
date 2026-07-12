@@ -4,7 +4,7 @@ mod config;
 mod ui;
 
 use anyhow::Result;
-use app::AppState;
+use app::{AppMessage, AppState};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent},
     execute,
@@ -20,6 +20,7 @@ use ratatui::{
 use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,8 +36,6 @@ async fn main() -> Result<()> {
 
     let client = api::NotionClient::new(cfg.auth.integration_token.clone());
     let mut state = AppState::new(cfg.databases.clone());
-
-    fetch_events(&client, &mut state, &cfg.databases).await;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -60,8 +59,21 @@ async fn run_app(
     databases: &[config::DatabaseConfig],
 ) -> Result<()> {
     let mut pending_d = false; // "dd" の 1 キー目フラグ
+    let mut quitting = false; // q 押下後、未完了のリクエストの完了を待っている間 true
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<AppMessage>();
+    // 初期ロード
+    spawn_fetch(state, &tx, client, databases);
 
     loop {
+        while let Ok(msg) = rx.try_recv() {
+            apply_message(state, msg, &tx, client, databases, quitting);
+        }
+
+        if quitting && state.pending_requests == 0 {
+            break;
+        }
+
         terminal.draw(|f| {
             let has_form = state.form.is_some();
             let root_constraints: Vec<Constraint> = if has_form {
@@ -97,21 +109,38 @@ async fn run_app(
 
         if event::poll(Duration::from_millis(200))? {
             if let Event::Key(KeyEvent { code, .. }) = event::read()? {
+                if quitting {
+                    // シャットダウン待機中は新規入力を無視する（再描画・ドレインは継続）
+                    continue;
+                }
                 // モードを clone して borrow checker を回避
                 let current_mode = state.mode.clone();
                 match current_mode {
                     app::AppMode::Normal => {
                         match code {
-                            KeyCode::Char('q') => break,
+                            KeyCode::Char('q') => {
+                                pending_d = false;
+                                if state.pending_requests > 0 {
+                                    quitting = true;
+                                    state.status_message =
+                                        Some("通信の完了を待っています...".to_string());
+                                } else {
+                                    break;
+                                }
+                            }
                             KeyCode::Char('H') => {
                                 pending_d = false;
                                 state.prev_week();
-                                fetch_events(client, state, databases).await;
+                                if state.needs_fetch() {
+                                    spawn_fetch(state, &tx, client, databases);
+                                }
                             }
                             KeyCode::Char('L') => {
                                 pending_d = false;
                                 state.next_week();
-                                fetch_events(client, state, databases).await;
+                                if state.needs_fetch() {
+                                    spawn_fetch(state, &tx, client, databases);
+                                }
                             }
                             KeyCode::Char('j') => {
                                 pending_d = false;
@@ -123,24 +152,24 @@ async fn run_app(
                             }
                             KeyCode::Char('h') => {
                                 pending_d = false;
-                                let week_before = state.current_week_start;
                                 state.select_prev_day();
-                                if state.current_week_start != week_before {
-                                    fetch_events(client, state, databases).await;
+                                if state.needs_fetch() {
+                                    spawn_fetch(state, &tx, client, databases);
                                 }
                             }
                             KeyCode::Char('l') => {
                                 pending_d = false;
-                                let week_before = state.current_week_start;
                                 state.select_next_day();
-                                if state.current_week_start != week_before {
-                                    fetch_events(client, state, databases).await;
+                                if state.needs_fetch() {
+                                    spawn_fetch(state, &tx, client, databases);
                                 }
                             }
                             KeyCode::Char('t') => {
                                 pending_d = false;
                                 state.go_to_today();
-                                fetch_events(client, state, databases).await;
+                                if state.needs_fetch() {
+                                    spawn_fetch(state, &tx, client, databases);
+                                }
                             }
                             KeyCode::Tab => {
                                 pending_d = false;
@@ -213,7 +242,7 @@ async fn run_app(
                         match code {
                             KeyCode::Esc => state.close_form(),
                             KeyCode::Enter => {
-                                handle_form_submit(client, state, databases).await;
+                                handle_form_submit(state, &tx, client);
                             }
                             _ => {
                                 if let Some(form) = state.form.as_mut() {
@@ -233,7 +262,7 @@ async fn run_app(
                     }
                     app::AppMode::Confirm(_) => match code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
-                            handle_delete_confirm(client, state, databases).await;
+                            handle_delete_confirm(state, &tx, client);
                         }
                         _ => {
                             state.mode = app::AppMode::Normal;
@@ -253,13 +282,13 @@ fn render_status_bar(f: &mut ratatui::Frame, area: Rect, state: &AppState) {
         // Confirm モードはステータスバーに確認メッセージを表示（status_message に格納済み）
         error.unwrap_or("").to_string()
     } else {
-        ui::status_bar_text(state.loading, error)
+        ui::status_bar_text(state.pending_requests > 0, error)
     };
     let style = if error.is_some() && !matches!(state.mode, app::AppMode::Confirm(_)) {
         Style::default().fg(Color::Red)
     } else if matches!(state.mode, app::AppMode::Confirm(_)) {
         Style::default().fg(Color::Yellow)
-    } else if state.loading {
+    } else if state.pending_requests > 0 {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default().fg(Color::DarkGray)
@@ -295,10 +324,10 @@ fn event_to_form_strings(
     }
 }
 
-async fn handle_form_submit(
-    client: &api::NotionClient,
+fn handle_form_submit(
     state: &mut AppState,
-    databases: &[config::DatabaseConfig],
+    tx: &mpsc::UnboundedSender<AppMessage>,
+    client: &api::NotionClient,
 ) {
     let form = match state.form.clone() {
         Some(f) => f,
@@ -310,73 +339,68 @@ async fn handle_form_submit(
         return;
     }
 
-    let db = match databases.get(form.db_index) {
-        Some(d) => d,
+    let db = match state.databases.get(form.db_index) {
+        Some(d) => d.clone(),
         None => {
             state.status_message = Some("DBが選択されていません".to_string());
             return;
         }
     };
 
-    let title_prop = db.title_property.as_deref().unwrap_or("Name");
-    let date_prop = db.date_property.as_deref().unwrap_or("Date");
+    let title_prop = db.title_property.clone().unwrap_or_else(|| "Name".to_string());
+    let date_prop = db.date_property.clone().unwrap_or_else(|| "Date".to_string());
     let (date_start, date_end) = app::form_logic::form_to_date_strings(&form);
 
-    match form.mode {
-        app::FormMode::Create => {
-            match client
+    // 即座にフォームを閉じてナビゲーションへ戻す
+    state.close_form();
+    state.begin_mutation();
+
+    let tx = tx.clone();
+    let client = client.clone();
+    let mode = form.mode.clone();
+    let title = form.title.clone();
+    let editing_id = form.editing_event_id.clone();
+    let db_id = db.id.clone();
+    let select = db.create_profile.select.clone();
+
+    tokio::spawn(async move {
+        let result: anyhow::Result<()> = match mode {
+            app::FormMode::Create => client
                 .create_page(
-                    &db.id,
-                    &form.title,
+                    &db_id,
+                    &title,
                     &date_start,
                     date_end.as_deref(),
-                    title_prop,
-                    date_prop,
-                    &db.create_profile.select,
+                    &title_prop,
+                    &date_prop,
+                    &select,
                 )
                 .await
-            {
-                Ok(_) => {
-                    state.close_form();
-                    fetch_events(client, state, databases).await;
-                }
-                Err(e) => {
-                    state.status_message = Some(format!("✗ {}", e));
-                }
-            }
-        }
-        app::FormMode::Edit => {
-            let page_id = match &form.editing_event_id {
-                Some(id) => id.clone(),
-                None => return,
-            };
-            match client
-                .update_page(
-                    &page_id,
-                    &form.title,
-                    &date_start,
-                    date_end.as_deref(),
-                    title_prop,
-                    date_prop,
-                )
-                .await
-            {
-                Ok(_) => {
-                    state.close_form();
-                    fetch_events(client, state, databases).await;
-                }
-                Err(e) => {
-                    state.status_message = Some(format!("✗ {}", e));
-                }
-            }
-        }
-    }
+                .map(|_| ()),
+            app::FormMode::Edit => match editing_id {
+                Some(id) => client
+                    .update_page(
+                        &id,
+                        &title,
+                        &date_start,
+                        date_end.as_deref(),
+                        &title_prop,
+                        &date_prop,
+                    )
+                    .await
+                    .map(|_| ()),
+                None => Ok(()),
+            },
+        };
+        let error = result.err().map(|e| format!("✗ {}", e));
+        let _ = tx.send(AppMessage::MutationResult { error });
+    });
 }
 
-async fn handle_delete_confirm(
-    client: &api::NotionClient,
+fn handle_delete_confirm(
     state: &mut AppState,
-    databases: &[config::DatabaseConfig],
+    tx: &mpsc::UnboundedSender<AppMessage>,
+    client: &api::NotionClient,
 ) {
     let page_id = match &state.mode {
         app::AppMode::Confirm(app::ConfirmAction::DeleteEvent(id)) => id.clone(),
@@ -385,66 +409,98 @@ async fn handle_delete_confirm(
 
     state.mode = app::AppMode::Normal;
     state.status_message = None;
+    state.begin_mutation();
 
-    match client.archive_page(&page_id).await {
-        Ok(_) => {
-            fetch_events(client, state, databases).await;
-        }
-        Err(e) => {
-            state.status_message = Some(format!("✗ {}", e));
-        }
-    }
+    let tx = tx.clone();
+    let client = client.clone();
+    tokio::spawn(async move {
+        let error = client
+            .archive_page(&page_id)
+            .await
+            .err()
+            .map(|e| format!("✗ {}", e));
+        let _ = tx.send(AppMessage::MutationResult { error });
+    });
 }
 
-async fn fetch_events(
-    client: &api::NotionClient,
+fn spawn_fetch(
     state: &mut AppState,
+    tx: &mpsc::UnboundedSender<AppMessage>,
+    client: &api::NotionClient,
     databases: &[config::DatabaseConfig],
 ) {
-    let week_start = state.current_week_start;
-    let start_str = week_start.format("%Y-%m-%d").to_string();
-    let end_str = (week_start + chrono::Duration::weeks(3))
-        .format("%Y-%m-%d")
-        .to_string();
+    let req = state.plan_fetch();
+    let tx = tx.clone();
+    let client = client.clone();
+    let databases = databases.to_vec();
+    tokio::spawn(async move {
+        let mut fetched: HashMap<chrono::NaiveDate, Vec<api::models::NotionEvent>> = HashMap::new();
+        let mut error: Option<String> = None;
+        let mut had_success = false;
 
-    state.loading = true;
-    let mut fetched_events: HashMap<chrono::NaiveDate, Vec<api::models::NotionEvent>> =
-        HashMap::new();
-    let mut had_success = false;
-
-    for db in databases {
-        match client.query_database(&db.id, &start_str, &end_str).await {
-            Ok(pages) => {
-                had_success = true;
-                for page in &pages {
-                    if let Some(mut event) = api::parse_event_with_keys(
-                        page,
-                        &db.id,
-                        db.title_property.as_deref(),
-                        db.date_property.as_deref(),
-                    ) {
-                        event.color = Some(db.color.clone());
-                        let date = event.date_start.or_else(|| {
-                            event
-                                .datetime_start
-                                .map(|dt| dt.with_timezone(&chrono::Local).date_naive())
-                        });
-                        if let Some(d) = date {
-                            fetched_events.entry(d).or_default().push(event);
+        for db in &databases {
+            match client.query_database(&db.id, &req.start, &req.end).await {
+                Ok(pages) => {
+                    had_success = true;
+                    for page in &pages {
+                        if let Some(mut event) = api::parse_event_with_keys(
+                            page,
+                            &db.id,
+                            db.title_property.as_deref(),
+                            db.date_property.as_deref(),
+                        ) {
+                            event.color = Some(db.color.clone());
+                            let date = event.date_start.or_else(|| {
+                                event
+                                    .datetime_start
+                                    .map(|dt| dt.with_timezone(&chrono::Local).date_naive())
+                            });
+                            if let Some(d) = date {
+                                fetched.entry(d).or_default().push(event);
+                            }
                         }
                     }
                 }
+                Err(e) => {
+                    error = Some(format!("API Error: {}", e));
+                }
             }
-            Err(e) => {
-                state.status_message = Some(format!("API Error: {}", e));
+        }
+
+        // 1件でも成功していれば成功分を反映（エラーは無視）
+        let final_error = if had_success { None } else { error };
+        let _ = tx.send(AppMessage::FetchResult {
+            generation: req.generation,
+            range: req.range,
+            events: fetched,
+            error: final_error,
+        });
+    });
+}
+
+fn apply_message(
+    state: &mut AppState,
+    msg: AppMessage,
+    tx: &mpsc::UnboundedSender<AppMessage>,
+    client: &api::NotionClient,
+    databases: &[config::DatabaseConfig],
+    quitting: bool,
+) {
+    match msg {
+        AppMessage::FetchResult {
+            generation,
+            range,
+            events,
+            error,
+        } => {
+            state.apply_fetch_result(generation, range, events, error);
+        }
+        AppMessage::MutationResult { error } => {
+            state.finish_mutation(error.clone());
+            if error.is_none() && !quitting {
+                // 変更が反映された最新データを取得（終了処理中は再取得しない）
+                spawn_fetch(state, tx, client, databases);
             }
         }
     }
-
-    if had_success {
-        state.replace_events(fetched_events);
-        state.status_message = None;
-    }
-
-    state.loading = false;
 }
